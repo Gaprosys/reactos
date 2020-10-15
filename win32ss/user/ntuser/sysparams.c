@@ -152,8 +152,8 @@ SpiLoadTimeOut(VOID)
     {
         return 0;
     }
-    if (wcslen(szApplicationName) == 0) return 0;
-    return SpiLoadInt(KEY_DESKTOP, VAL_SCRTO, 0);
+    if (szApplicationName[0] == 0) return 0;
+    return SpiLoadInt(KEY_DESKTOP, VAL_SCRTO, 600);
 }
 
 static
@@ -245,6 +245,10 @@ SpiUpdatePerUserSystemParameters(VOID)
     gspv.iMouseHoverWidth = SpiLoadMouse(VAL_HOVERWIDTH, 4);
     gspv.iMouseHoverHeight = SpiLoadMouse(VAL_HOVERHEIGHT, 4);
 
+    /* Load keyboard settings */
+    gspv.dwKbdSpeed = SpiLoadInt(KEY_KBD, VAL_KBDSPD, 31);
+    gspv.iKbdDelay = SpiLoadInt(KEY_KBD, VAL_KBDDELAY, 1);
+
     /* Load NONCLIENTMETRICS */
     gspv.ncm.cbSize = sizeof(NONCLIENTMETRICSW);
     gspv.ncm.iBorderWidth = SpiLoadMetric(VAL_BORDER, 1);
@@ -253,7 +257,7 @@ SpiUpdatePerUserSystemParameters(VOID)
     gspv.ncm.iCaptionWidth = SpiLoadMetric(L"CaptionWidth", 19);
     gspv.ncm.iCaptionHeight = SpiLoadMetric(L"CaptionHeight", 19);
     gspv.ncm.iSmCaptionWidth = SpiLoadMetric(L"SmCaptionWidth", 12);
-    gspv.ncm.iSmCaptionHeight =  SpiLoadMetric(L"SmCaptionHeight", 14);
+    gspv.ncm.iSmCaptionHeight = SpiLoadMetric(L"SmCaptionHeight", 15);
     gspv.ncm.iMenuWidth = SpiLoadMetric(L"MenuWidth", 18);
     gspv.ncm.iMenuHeight = SpiLoadMetric(L"MenuHeight", 18);
 #if (WINVER >= 0x0600)
@@ -276,7 +280,7 @@ SpiUpdatePerUserSystemParameters(VOID)
     gspv.im.cbSize = sizeof(ICONMETRICSW);
     gspv.im.iHorzSpacing = SpiLoadMetric(VAL_ICONSPC, 64);
     gspv.im.iVertSpacing = SpiLoadMetric(VAL_ICONVSPC, 64);
-    gspv.im.iTitleWrap = SpiLoadMetric(VAL_ITWRAP, 0);
+    gspv.im.iTitleWrap = SpiLoadMetric(VAL_ITWRAP, 1);
     SpiLoadFont(&gspv.im.lfFont, L"IconFont", &lf1);
 
     /* Load desktop settings */
@@ -301,8 +305,8 @@ SpiUpdatePerUserSystemParameters(VOID)
     gspv.bBeep = TRUE;
     gspv.uiFocusBorderWidth = 1;
     gspv.uiFocusBorderHeight = 1;
-    gspv.bMenuDropAlign = 1;
-    gspv.dwMenuShowDelay = 100;
+    gspv.bMenuDropAlign = 0;
+    gspv.dwMenuShowDelay = SpiLoadInt(KEY_DESKTOP, L"MenuShowDelay", 400);
     gspv.dwForegroundFlashCount = 3;
 
     gspv.iScrSaverTimeout = SpiLoadTimeOut();
@@ -311,6 +315,8 @@ SpiUpdatePerUserSystemParameters(VOID)
 #if(WINVER >= 0x0600)
     gspv.bScrSaverSecure = FALSE;
 #endif
+
+    gspv.bFastTaskSwitch = TRUE;
 
     gspv.accesstimeout.cbSize = sizeof(ACCESSTIMEOUT);
     gspv.filterkeys.cbSize = sizeof(FILTERKEYS);
@@ -1042,27 +1048,33 @@ SpiGetSet(UINT uiAction, UINT uiParam, PVOID pvParam, FLONG fl)
 
         case SPI_SETWORKAREA:
         {
-            /* FIXME: We should set the work area of the monitor
-                      that contains the specified rectangle */
-            PMONITOR pmonitor = UserGetPrimaryMonitor();
-            RECT rcWorkArea;
+            PMONITOR pmonitor;
+            RECTL rcWorkArea, rcIntersect;
 
-            if(!pmonitor)
+            if (!pvParam)
                 return 0;
 
-            if (!SpiSet(&rcWorkArea, pvParam, sizeof(RECTL), fl))
+            RtlCopyMemory(&rcWorkArea, pvParam, sizeof(rcWorkArea));
+
+            /* fail if empty */
+            if (RECTL_bIsEmptyRect(&rcWorkArea))
                 return 0;
 
-            /* Verify the new values */
-            if (rcWorkArea.left < 0 ||
-                rcWorkArea.top < 0 ||
-                rcWorkArea.right > gpsi->aiSysMet[SM_CXSCREEN] ||
-                rcWorkArea.bottom > gpsi->aiSysMet[SM_CYSCREEN] ||
-                rcWorkArea.right <= rcWorkArea.left ||
-                rcWorkArea.bottom <= rcWorkArea.top)
+            /* get the nearest monitor */
+            pmonitor = UserMonitorFromRect(&rcWorkArea, MONITOR_DEFAULTTONEAREST);
+            if (!pmonitor)
                 return 0;
 
-            pmonitor->rcWork = rcWorkArea;
+            /* fail unless work area is completely in monitor */
+            if (!RECTL_bIntersectRect(&rcIntersect, &pmonitor->rcMonitor, &rcWorkArea) ||
+                !RtlEqualMemory(&rcIntersect, &rcWorkArea, sizeof(rcIntersect)))
+            {
+                return 0;
+            }
+
+            if (!SpiSet(&pmonitor->rcWork, pvParam, sizeof(RECTL), fl))
+                return 0;
+
             if (fl & SPIF_UPDATEINIFILE)
             {
                 // FIXME: What to do?

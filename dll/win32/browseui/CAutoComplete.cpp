@@ -3,6 +3,7 @@
  *
  *    Copyright 2004    Maxime Bellengé <maxime.bellenge@laposte.net>
  *    Copyright 2009  Andrew Hill
+ *    Copyright 2020  Katayama Hirofumi MZ <katayama.hirofumi.mz@gmail.com>
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -65,8 +66,11 @@ CAutoComplete::~CAutoComplete()
     TRACE(" destroying IAutoComplete(%p)\n", this);
     HeapFree(GetProcessHeap(), 0, quickComplete);
     HeapFree(GetProcessHeap(), 0, txtbackup);
-    RemovePropW(hwndEdit, autocomplete_propertyW);
-    SetWindowLongPtrW(hwndEdit, GWLP_WNDPROC, (LONG_PTR)wpOrigEditProc);
+    if (wpOrigEditProc)
+    {
+        SetWindowLongPtrW(hwndEdit, GWLP_WNDPROC, (LONG_PTR)wpOrigEditProc);
+        RemovePropW(hwndEdit, autocomplete_propertyW);
+    }
     if (hwndListBox)
         DestroyWindow(hwndListBox);
 }
@@ -148,10 +152,27 @@ HRESULT WINAPI CAutoComplete::Init(HWND hwndEdit, IUnknown *punkACL, LPCOLESTR p
 
     this->hwndEdit = hwndEdit;
     this->initialized = TRUE;
-    this->wpOrigEditProc = (WNDPROC)SetWindowLongPtrW(hwndEdit, GWLP_WNDPROC, (LONG_PTR) ACEditSubclassProc);
+
     /* Keep at least one reference to the object until the edit window is destroyed. */
     this->AddRef();
-    SetPropW( this->hwndEdit, autocomplete_propertyW, (HANDLE)this );
+
+    /* If another AutoComplete object was previously assigned to this edit control,
+       release it but keep the same callback on the control, to avoid an infinite
+       recursive loop in ACEditSubclassProc while the property is set to this object */
+    CAutoComplete *prev = static_cast<CAutoComplete *>(GetPropW(hwndEdit, autocomplete_propertyW));
+
+    if (prev && prev->initialized)
+    {
+        this->wpOrigEditProc = prev->wpOrigEditProc;
+        SetPropW(hwndEdit, autocomplete_propertyW, this);
+        prev->wpOrigEditProc = NULL;
+        prev->Release();
+    }
+    else
+    {
+        SetPropW( this->hwndEdit, autocomplete_propertyW, (HANDLE)this );
+        this->wpOrigEditProc = (WNDPROC)SetWindowLongPtrW(hwndEdit, GWLP_WNDPROC, (LONG_PTR)ACEditSubclassProc);
+    }
 
     if (options & ACO_AUTOSUGGEST)
     {
@@ -257,6 +278,47 @@ HRESULT WINAPI CAutoComplete::SetOptions(DWORD dwFlag)
         CreateListbox();
 
     return hr;
+}
+
+/* Edit_BackWord --- Delete previous word in text box */
+static void Edit_BackWord(HWND hwndEdit)
+{
+    INT iStart, iEnd;
+    iStart = iEnd = 0;
+    SendMessageW(hwndEdit, EM_GETSEL, (WPARAM)&iStart, (LPARAM)&iEnd);
+
+    if (iStart != iEnd || iStart < 0)
+        return;
+
+    size_t cchText = GetWindowTextLengthW(hwndEdit);
+    if (cchText < (size_t)iStart || (INT)cchText <= 0)
+        return;
+
+    CComHeapPtr<WCHAR> pszText;
+    if (!pszText.Allocate(cchText + 1))
+        return;
+
+    if (GetWindowTextW(hwndEdit, pszText, cchText + 1) <= 0)
+        return;
+
+    WORD types[2];
+    for (--iStart; 0 < iStart; --iStart)
+    {
+        GetStringTypeW(CT_CTYPE1, &pszText[iStart - 1], 2, types);
+        if (((types[0] & C1_PUNCT) && !(types[1] & C1_SPACE)) ||
+            ((types[0] & C1_SPACE) && (types[1] & (C1_ALPHA | C1_DIGIT))))
+        {
+            SendMessageW(hwndEdit, EM_SETSEL, iStart, iEnd);
+            SendMessageW(hwndEdit, EM_REPLACESEL, TRUE, (LPARAM)L"");
+            return;
+        }
+    }
+
+    if (iStart == 0)
+    {
+        SendMessageW(hwndEdit, EM_SETSEL, iStart, iEnd);
+        SendMessageW(hwndEdit, EM_REPLACESEL, TRUE, (LPARAM)L"");
+    }
 }
 
 /*
@@ -387,6 +449,14 @@ LRESULT APIENTRY CAutoComplete::ACEditSubclassProc(HWND hwnd, UINT uMsg, WPARAM 
                 }; break;
                 
                 case VK_BACK:
+                {
+                    if (GetKeyState(VK_CONTROL) < 0) // Ctrl+Backspace
+                    {
+                        Edit_BackWord(hwnd);
+                        return 0;
+                    }
+                }
+                // FALL THROUGH
                 case VK_DELETE:
                 {
                     if ((! *hwndText) && (pThis->options & ACO_AUTOSUGGEST))

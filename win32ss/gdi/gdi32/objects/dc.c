@@ -15,7 +15,7 @@ IntCreateDICW(
     UNICODE_STRING Device, Output;
     HDC hdc = NULL;
     BOOL Display = FALSE, Default = FALSE;
-    ULONG UMdhpdev = 0;
+    HANDLE UMdhpdev = 0;
 
     HANDLE hspool = NULL;
 
@@ -53,10 +53,12 @@ IntCreateDICW(
 
     if (lpwszOutput) RtlInitUnicodeString(&Output, lpwszOutput);
 
+    // Handle Print device or something else.
     if (!Display)
     {
-        //Handle Print device or something else.
+        // WIP - GDI Print Commit coming in soon.
         DPRINT1("Not a DISPLAY device! %wZ\n", &Device);
+        return NULL; // Return NULL until then.....
     }
 
     hdc = NtGdiOpenDCW((Default ? NULL : &Device),
@@ -65,7 +67,7 @@ IntCreateDICW(
                        iType,             // DCW 0 and ICW 1.
                        Display,
                        hspool,
-                       (PVOID) &UMdhpdev );
+                       &UMdhpdev );
 #if 0
 // Handle something other than a normal dc object.
     if (GDI_HANDLE_GET_TYPE(hdc) != GDI_OBJECT_TYPE_DC)

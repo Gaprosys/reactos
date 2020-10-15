@@ -3,7 +3,7 @@ remove_definitions(-D_WIN32_WINNT=0x502)
 add_definitions(-D_WIN32_WINNT=0x600)
 
 include_directories(${REACTOS_SOURCE_DIR}/sdk/include/reactos/wine)
-add_definitions(-D__WINESRC__ -DMSIRUNMODE=MSIRUNMODE_T)
+add_definitions(-D__WINESRC__ -D__ROS_LONG64__ -DMSIRUNMODE=MSIRUNMODE_T)
 spec2def(msi.dll msi.spec ADD_IMPORTLIB)
 generate_idl_iids(msiserver.idl)
 
@@ -54,18 +54,20 @@ list(APPEND SOURCE
     tokenize.c
     update.c
     upgrade.c
-    where.c
-    precomp.h)
+    where.c)
+
+list(APPEND PCH_SKIP_SOURCE
+    cond.tab.c
+    sql.tab.c
+    ${CMAKE_CURRENT_BINARY_DIR}/msiserver_i.c
+    ${CMAKE_CURRENT_BINARY_DIR}/msi_stubs.c)
 
 # cond.tab.c/sql.tab.c have been generated with relative file paths...
 set_source_files_properties(cond.tab.c sql.tab.c PROPERTIES COMPILE_FLAGS "-UREACTOS_SOURCE_DIR -DREACTOS_SOURCE_DIR=\"\\\".\\\"\"")
 
 add_library(msi MODULE
     ${SOURCE}
-    cond.tab.c
-    sql.tab.c
-    ${CMAKE_CURRENT_BINARY_DIR}/msiserver_i.c
-    ${CMAKE_CURRENT_BINARY_DIR}/msi_stubs.c
+    ${PCH_SKIP_SOURCE}
     msi.rc
     ${CMAKE_CURRENT_BINARY_DIR}/msi.def)
 
@@ -84,5 +86,5 @@ add_importlibs(msi advapi32 advapi32_vista cabinet comctl32 gdi32 ole32 oleaut32
     kernel32
     ntdll)
 
-add_pch(msi precomp.h SOURCE)
+add_pch(msi precomp.h "${PCH_SKIP_SOURCE}")
 add_cd_file(TARGET msi DESTINATION reactos/system32 FOR all)

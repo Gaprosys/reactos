@@ -539,6 +539,16 @@ typedef enum _SECURITY_DESCRIPTOR_TYPE
 } SECURITY_DESCRIPTOR_TYPE, *PSECURITY_DESCRIPTOR_TYPE;
 
 //
+// Action types and data for PiQueueDeviceAction()
+//
+typedef enum _DEVICE_ACTION
+{
+    PiActionEnumDeviceTree,
+    PiActionEnumRootDevices,
+    PiActionResetDevice
+} DEVICE_ACTION;
+
+//
 // Resource code
 //
 ULONG
@@ -679,11 +689,6 @@ IopActionInitChildServices(
 );
 
 NTSTATUS
-IopEnumerateDevice(
-    IN PDEVICE_OBJECT DeviceObject
-);
-
-NTSTATUS
 IoCreateDriverList(
     VOID
 );
@@ -738,6 +743,13 @@ IopCreateRegistryKeyEx(
 NTSTATUS
 IopTraverseDeviceTree(
     PDEVICETREE_TRAVERSE_CONTEXT Context);
+
+NTSTATUS
+NTAPI
+IopCreateDeviceKeyPath(
+    IN PCUNICODE_STRING RegistryPath,
+    IN ULONG CreateOptions,
+    OUT PHANDLE Handle);
 
 //
 // PnP Routines
@@ -1368,7 +1380,7 @@ IoSetIoCompletion(
     IN PVOID ApcContext,
     IN NTSTATUS IoStatus,
     IN ULONG_PTR IoStatusInformation,
-    IN BOOLEAN Quota 
+    IN BOOLEAN Quota
 );
 
 //
@@ -1399,6 +1411,21 @@ IopStoreSystemPartitionInformation(IN PUNICODE_STRING NtSystemPartitionDeviceNam
 );
 
 //
+// Device action
+//
+VOID
+PiQueueDeviceAction(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ DEVICE_ACTION Action,
+    _In_opt_ PKEVENT CompletionEvent,
+    _Out_opt_ NTSTATUS *CompletionStatus);
+
+NTSTATUS
+PiPerformSyncDeviceAction(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ DEVICE_ACTION Action);
+
+//
 // Global I/O Data
 //
 extern POBJECT_TYPE IoCompletionType;
@@ -1418,6 +1445,7 @@ extern PDRIVER_OBJECT IopRootDriverObject;
 extern KSPIN_LOCK IopDeviceActionLock;
 extern LIST_ENTRY IopDeviceActionRequestList;
 extern RESERVE_IRP_ALLOCATOR IopReserveIrpAllocator;
+extern BOOLEAN IoRemoteBootClient;
 
 //
 // Inlined Functions

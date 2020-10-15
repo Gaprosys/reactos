@@ -1,5 +1,10 @@
 #pragma once
 
+/* Bitmaps */
+#define IDB_ZIPFLDR                    164
+#define IDB_HEADER                     200
+#define IDB_WATERMARK                  201
+
 /* registry stuff */
 #define IDR_ZIPFLDR                     8000
 
@@ -11,6 +16,7 @@
 #define IDC_BROWSE                  1002
 #define IDC_PASSWORD                1003
 #define IDC_PROGRESS                1004
+#define IDC_STATUSTEXT              1005
 
 #define IDD_PROPPAGECOMPLETE        1100
 #define IDC_DESTDIR                 1101
@@ -35,7 +41,12 @@
 #define IDS_COL_DATE_MOD    106
 #define IDS_YES             107
 #define IDS_NO              108
-
+#define IDS_ERRORTITLE      109
+#define IDS_CANTSTARTTHREAD 110
+#define IDS_NOFILES         111
+#define IDS_CANTCREATEZIP   112
+#define IDS_CANTREADFILE    113
+#define IDS_EXTRACTING      114
 
 /* Wizard titles */
 #define IDS_WIZ_TITLE           8000

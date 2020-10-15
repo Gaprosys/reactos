@@ -24,9 +24,9 @@ STYLE DS_SHELLFONT | WS_CHILD | WS_DISABLED | WS_CAPTION
 CAPTION "Buat Pintasan"
 FONT 8, "MS Shell Dlg", 0, 0, 0x0
 BEGIN
-    LTEXT "Penuntun ini membantu membuat pintasan pada lokal atau\njaringan berupa program, berkas, folder, Komputer, atau Internet\nalamat.", -1, 120, 15, 200, 30
+    LTEXT "Penuntun ini membantu membuat pintasan pada lokal atau\njaringan berupa program, berkas, folder, Komputer, atau Alamat Internet.", -1, 120, 15, 200, 30
     LTEXT "Ketik lokasi butir:", -1, 120, 50, 120, 10
-    EDITTEXT IDC_SHORTCUT_LOCATION, 120, 65, 150, 15, ES_LEFT
+    EDITTEXT IDC_SHORTCUT_LOCATION, 120, 65, 150, 15, ES_LEFT | ES_AUTOHSCROLL
     PUSHBUTTON "Cari...", IDC_SHORTCUT_BROWSE, 272, 65, 55, 15, ES_LEFT
     LTEXT "Klik Lanjut untuk meneruskan.", -1, 120, 97, 162, 10
 END
@@ -37,7 +37,7 @@ CAPTION "Pilih Judul untuk Program"
 FONT 8, "MS Shell Dlg", 0, 0, 0x0
 BEGIN
     LTEXT "&Ketik nama untuk pintasan ini:", -1, 120, 15, 150, 10
-    EDITTEXT IDC_SHORTCUT_NAME, 120, 35, 150, 15, ES_LEFT
+    EDITTEXT IDC_SHORTCUT_NAME, 120, 35, 150, 15, ES_LEFT | ES_AUTOHSCROLL
     LTEXT "Klik Selesai untuk membuat pintasan.", -1, 118, 97, 178, 17
 END
 
@@ -46,7 +46,7 @@ STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYS
 CAPTION "Hapus Pintasan/Folder"
 FONT 8, "MS Shell Dlg"
 BEGIN
-    LTEXT "&Untuk menghapus butir dari menu Mulai , pilih butir dan klik Hapus .", -1, 10, 10, 192, 16
+    LTEXT "&Untuk menghapus butir dari menu Mulai, pilih butir dan klik Hapus.", -1, 10, 10, 192, 16
     CONTROL "List1", IDC_STARTMENU_TREE, "SysListView32", LVS_REPORT | LVS_SHOWSELALWAYS |
             LVS_SORTASCENDING | WS_BORDER | WS_TABSTOP, 10, 32, 192, 138
     PUSHBUTTON "&Hapus", IDC_REMOVE_ENTRIES, 98, 176, 50, 14, WS_GROUP | WS_TABSTOP
@@ -85,4 +85,5 @@ BEGIN
     IDS_NO_MEMORY "Tidak ada memori yang bisa dialokasikan!"
     IDS_NO_DIRECTORY "Direktori belum diberi!"
     IDS_INVALID_PATH "Jalur yang diberikan tidak sah!"
+    IDS_INVALID_NAME "The shortcut name you entered either contained characters that are invalid for file names or was too long."
 END

@@ -18,6 +18,7 @@ typedef struct _PROFILEDATA
 {
     DWORD dwRefCount;
     DWORD dwState;
+    BOOL bUnknownProfile;
     PWSTR pszFullName;
     PWSTR pszProfilePath;
 } PROFILEDATA, *PPROFILEDATA;
@@ -124,7 +125,6 @@ ChangeUserProfileType(
     ZeroMemory(&Item, sizeof(LVITEM));
     Item.mask = LVIF_PARAM;
     Item.iItem = iSelected;
-    Item.iSubItem = 0;
     if (!ListView_GetItem(hwndListView, &Item))
         return FALSE;
 
@@ -169,7 +169,6 @@ DeleteUserProfile(
     ZeroMemory(&Item, sizeof(LVITEM));
     Item.mask = LVIF_PARAM;
     Item.iItem = iSelected;
-    Item.iSubItem = 0;
     if (!ListView_GetItem(hwndListView, &Item))
         return FALSE;
 
@@ -252,7 +251,6 @@ CopyUserProfile(
     ZeroMemory(&Item, sizeof(LVITEM));
     Item.mask = LVIF_PARAM;
     Item.iItem = iSelected;
-    Item.iSubItem = 0;
     if (!ListView_GetItem(hwndListView, &Item))
         return FALSE;
 
@@ -391,7 +389,8 @@ BOOL
 GetProfileName(
     _In_ PSID pProfileSid,
     _In_ DWORD dwNameBufferSize,
-    _Out_ PWSTR pszNameBuffer)
+    _Out_ PWSTR pszNameBuffer,
+    _Out_ PBOOL pbUnknownProfile)
 {
     WCHAR szAccountName[128], szDomainName[128];
     DWORD dwAccountNameSize, dwDomainNameSize;
@@ -409,6 +408,7 @@ GetProfileName(
     {
         /* Unknown account */
         LoadStringW(hApplet, IDS_USERPROFILE_ACCOUNT_UNKNOWN, pszNameBuffer, dwNameBufferSize);
+        *pbUnknownProfile = TRUE;
     }
     else
     {
@@ -426,38 +426,10 @@ GetProfileName(
             /* Normal account */
             wsprintf(pszNameBuffer, L"%s\\%s", szDomainName, szAccountName);
         }
+        *pbUnknownProfile = FALSE;
     }
 
     return TRUE;
-}
-
-
-static
-VOID
-FormatProfileSize(
-    _Out_ LPWSTR Buffer,
-    _In_ double size)
-{
-    const LPWSTR units[] = {L"MB", L"GB", L"TB"};
-    int i = 0, j;
-
-    size /= 1024;
-    size /= 1024;
-
-    while (size >= 1024 && i < 3)
-    {
-        size /= 1024;
-        i++;
-    }
-
-    if (size < 10)
-        j = 2;
-    else if (size < 100)
-        j = 1;
-    else
-        j = 0;
-
-    swprintf(Buffer, L"%.*f %s", j, size, units[i]);
 }
 
 
@@ -479,6 +451,7 @@ AddUserProfile(
     HANDLE hFile;
     SYSTEMTIME SystemTime;
     ULONGLONG ullProfileSize;
+    BOOL bUnknownProfile;
     DWORD dwError;
 
     /* Get the profile path */
@@ -521,7 +494,10 @@ AddUserProfile(
     GetProfileSize(szProfilePath, &ullProfileSize);
 
     /* Get the profile name */
-    if (!GetProfileName(pProfileSid, ARRAYSIZE(szNameBuffer), szNameBuffer))
+    if (!GetProfileName(pProfileSid,
+                        ARRAYSIZE(szNameBuffer),
+                        szNameBuffer,
+                        &bUnknownProfile))
         return;
 
     /* Get the profile state value */
@@ -560,6 +536,7 @@ AddUserProfile(
 
     pProfileData->dwRefCount = dwRefCount;
     pProfileData->dwState = dwState;
+    pProfileData->bUnknownProfile = bUnknownProfile;
 
     ptr = (PWSTR)((ULONG_PTR)pProfileData + sizeof(PROFILEDATA));
     pProfileData->pszFullName = ptr;
@@ -579,7 +556,7 @@ AddUserProfile(
     iItem = ListView_InsertItem(hwndListView, &lvi);
 
     /* Set the profile size */
-    FormatProfileSize(szNameBuffer, (double)ullProfileSize);
+    StrFormatByteSizeW(ullProfileSize, szNameBuffer, ARRAYSIZE(szNameBuffer) - 1);
     ListView_SetItemText(hwndListView, iItem, 1, szNameBuffer);
 
     /* Set the profile type */
@@ -629,29 +606,37 @@ UpdateButtonState(
     BOOL bChange = FALSE;
     BOOL bCopy = FALSE;
     BOOL bDelete = FALSE;
+    PPROFILEDATA pProfileData;
 
-    iSelected = ListView_GetNextItem(hwndListView, -1, LVNI_SELECTED);
-    if (iSelected != -1)
+    if (ListView_GetSelectedCount(hwndListView) != 0)
     {
-        Item.mask = LVIF_PARAM;
-        Item.iItem = iSelected;
-        Item.iSubItem = 0;
-        if (ListView_GetItem(hwndListView, &Item))
+        iSelected = ListView_GetNextItem(hwndListView, -1, LVNI_SELECTED);
+        if (iSelected != -1)
         {
-            if (Item.lParam != 0)
+            ZeroMemory(&Item, sizeof(LVITEM));
+            Item.mask = LVIF_PARAM;
+            Item.iItem = iSelected;
+            if (ListView_GetItem(hwndListView, &Item))
             {
-                bCopy = (((PPROFILEDATA)Item.lParam)->dwRefCount == 0);
-                bDelete = (((PPROFILEDATA)Item.lParam)->dwRefCount == 0);
-            }
-        }
+                if (Item.lParam != 0)
+                {
+                    pProfileData = (PPROFILEDATA)Item.lParam;
 
-        bChange = TRUE;
-    }
-    else
-    {
-        bChange = FALSE;
-        bCopy = FALSE;
-        bDelete = FALSE;
+                    if (pProfileData->bUnknownProfile)
+                    {
+                        bDelete = TRUE;
+                        bCopy = FALSE;
+                    }
+                    else
+                    {
+                        bDelete = (pProfileData->dwRefCount == 0);
+                        bCopy = (pProfileData->dwRefCount == 0);
+                    }
+                }
+            }
+
+            bChange = TRUE;
+        }
     }
 
     EnableWindow(GetDlgItem(hwndDlg, IDC_USERPROFILE_CHANGE), bChange);
@@ -681,9 +666,11 @@ AddUserProfiles(
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &hToken))
         return;
 
-    GetTokenInformation(hToken, TokenUser, NULL, 0, &dwSize);
-    if (dwSize == 0)
+    if (GetTokenInformation(hToken, TokenUser, NULL, 0, &dwSize) ||
+        GetLastError() != ERROR_INSUFFICIENT_BUFFER)
+    {
         goto done;
+    }
 
     pTokenUser = HeapAlloc(GetProcessHeap(), 0, dwSize);
     if (pTokenUser == NULL)
@@ -787,45 +774,36 @@ OnInitUserProfileDialog(HWND hwndDlg)
     AddUserProfiles(hwndDlg, GetDlgItem(hwndDlg, IDC_USERPROFILE_LIST), bAdmin);
 }
 
-
-static
-VOID
-OnDestroy(
-    _In_ HWND hwndDlg)
-{
-    HWND hwndList;
-    INT nItems, i;
-    LVITEM Item;
-
-    hwndList = GetDlgItem(hwndDlg, IDC_USERPROFILE_LIST);
-
-    nItems = ListView_GetItemCount(hwndList);
-    for (i = 0; i < nItems; i++)
-    {
-        Item.iItem = i;
-        Item.iSubItem = 0;
-        if (ListView_GetItem(hwndList, &Item))
-        {
-            if (Item.lParam != 0)
-                HeapFree(GetProcessHeap(), 0, (PVOID)Item.lParam);
-        }
-    }
-}
-
-
 static
 VOID
 OnNotify(
     _In_ HWND hwndDlg,
     _In_ NMHDR *nmhdr)
 {
+    LPNMLISTVIEW pNMLV;
+    
     if (nmhdr->idFrom == IDC_USERACCOUNT_LINK && nmhdr->code == NM_CLICK)
     {
         ShellExecuteW(hwndDlg, NULL, L"usrmgr.cpl", NULL, NULL, 0);
     }
-    else if (nmhdr->idFrom == IDC_USERPROFILE_LIST && nmhdr->code == LVN_ITEMCHANGED)
+    else if (nmhdr->idFrom == IDC_USERPROFILE_LIST)
     {
-        UpdateButtonState(hwndDlg, nmhdr->hwndFrom);
+        switch(nmhdr->code)
+        {
+            case LVN_ITEMCHANGED:
+                UpdateButtonState(hwndDlg, nmhdr->hwndFrom);            
+                break;
+            
+            case NM_DBLCLK:
+                ChangeUserProfileType(hwndDlg);
+                break;
+                
+            case LVN_DELETEITEM:
+                pNMLV = (LPNMLISTVIEW)nmhdr;            
+                if (pNMLV->lParam != 0)
+                    HeapFree(GetProcessHeap(), 0, (LPVOID)pNMLV->lParam);                
+                break;
+        }        
     }
 }
 
@@ -842,11 +820,7 @@ UserProfileDlgProc(HWND hwndDlg,
         case WM_INITDIALOG:
             OnInitUserProfileDialog(hwndDlg);
             return TRUE;
-
-        case WM_DESTROY:
-            OnDestroy(hwndDlg);
-            break;
-
+    
         case WM_COMMAND:
             switch (LOWORD(wParam))
             {

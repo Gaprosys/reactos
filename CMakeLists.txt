@@ -1,19 +1,8 @@
 
-cmake_minimum_required(VERSION 3.2.1)
-cmake_policy(VERSION 3.2.1)
+cmake_minimum_required(VERSION 3.17.0)
 
 if(NOT CMAKE_VERSION MATCHES "ReactOS")
     message(WARNING "Building with \"${CMAKE_COMMAND}\", which is not the custom CMake included in RosBE, might cause build issues...")
-endif()
-
-if(POLICY CMP0058)
-    # Ninja requires custom command byproducts to be explicit
-    cmake_policy(SET CMP0058 OLD)
-endif()
-
-if(POLICY CMP0065)
-    # Do not add flags to export symbols from executables without the ENABLE_EXPORTS target property
-    cmake_policy(SET CMP0065 NEW)
 endif()
 
 project(REACTOS)
@@ -88,8 +77,7 @@ if(NOT CMAKE_CROSSCOMPILING)
             add_definitions(/Dinline=__inline)
         endif()
     endif()
-
-    include_directories(sdk/include/host)
+    add_subdirectory(sdk/include/host)
 
     if(NOT MSVC)
         add_subdirectory(dll/win32/dbghelp)
@@ -99,7 +87,7 @@ if(NOT CMAKE_CROSSCOMPILING)
 
     set(NATIVE_TARGETS bin2c widl gendib cabman fatten hpp isohybrid mkhive mkisofs obj2bin spec2def geninc mkshelllink utf16le xml2sdb)
     if(NOT MSVC)
-        list(APPEND NATIVE_TARGETS rsym)
+        list(APPEND NATIVE_TARGETS rsym pefixup)
     endif()
 
     export(TARGETS ${NATIVE_TARGETS} FILE ${CMAKE_BINARY_DIR}/ImportExecutables.cmake NAMESPACE native- )
@@ -140,10 +128,14 @@ else()
         add_definitions(-D_WINKD_)
     endif()
 
-    if(CMAKE_VERSION MATCHES "ReactOS")
-        set(PCH 1 CACHE BOOL "Whether to use precompiled headers")
+    if(ENABLE_CCACHE)
+        message(WARNING "-- Disabling precompiled headers support (ccache).")
+        option(PCH "Whether to use precompiled headers" OFF)
+    elseif(GCC)
+        message(WARNING "-- Disabling precompiled headers on GCC by default CORE-17108.")
+        option(PCH "Whether to use precompiled headers" OFF)
     else()
-        set(PCH 0 CACHE BOOL "Whether to use precompiled headers")
+        option(PCH "Whether to use precompiled headers" ON)
     endif()
 
     # Version Options
@@ -160,6 +152,11 @@ else()
             add_definitions(-D_M_IX86)
         endif()
         add_definitions(-D_X86_ -D__i386__ -Di386)
+        if(SARCH STREQUAL "xbox")
+            add_definitions(-DSARCH_XBOX)
+        elseif(SARCH STREQUAL "pc98")
+            add_definitions(-DSARCH_PC98)
+        endif()
     elseif(ARCH STREQUAL "amd64")
         add_definitions(-D_M_AMD64 -D_AMD64_ -D__x86_64__ -D_WIN64)
     elseif(ARCH STREQUAL "arm")
@@ -239,13 +236,21 @@ else()
     if(NO_ROSSYM)
         include(sdk/cmake/baseaddress_dwarf.cmake)
     elseif(MSVC)
-        include(sdk/cmake/baseaddress_msvc.cmake)
+        if (ARCH STREQUAL "amd64")
+            include(sdk/cmake/baseaddress_msvc_x64.cmake)
+        else()
+            include(sdk/cmake/baseaddress_msvc.cmake)
+        endif()
     else()
         include(sdk/cmake/baseaddress.cmake)
     endif()
 
     # For MSVC builds, this puts all debug symbols file in the same directory.
-    set(CMAKE_PDB_OUTPUT_DIRECTORY "${REACTOS_BINARY_DIR}/msvc_pdb")
+    if(MSVC)
+        set(CMAKE_PDB_OUTPUT_DIRECTORY "${REACTOS_BINARY_DIR}/msvc_pdb")
+    elseif(SEPARATE_DBG)
+        set(CMAKE_PDB_OUTPUT_DIRECTORY "${REACTOS_BINARY_DIR}/symbols")
+    endif()
 
     #begin with boot so reactos_cab target is defined before all other modules
     add_subdirectory(boot)

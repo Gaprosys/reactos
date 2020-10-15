@@ -23,6 +23,21 @@ typedef struct _IOPNP_DEVICE_EXTENSION
 PUNICODE_STRING PiInitGroupOrderTable;
 USHORT PiInitGroupOrderTableCount;
 INTERFACE_TYPE PnpDefaultInterfaceType;
+BOOLEAN PnPBootDriversLoaded = FALSE;
+
+ARBITER_INSTANCE IopRootBusNumberArbiter;
+ARBITER_INSTANCE IopRootIrqArbiter;
+ARBITER_INSTANCE IopRootDmaArbiter;
+ARBITER_INSTANCE IopRootMemArbiter;
+ARBITER_INSTANCE IopRootPortArbiter;
+
+extern KEVENT PiEnumerationFinished;
+
+NTSTATUS NTAPI IopPortInitialize(VOID);
+NTSTATUS NTAPI IopMemInitialize(VOID);
+NTSTATUS NTAPI IopDmaInitialize(VOID);
+NTSTATUS NTAPI IopIrqInitialize(VOID);
+NTSTATUS NTAPI IopBusNumberInitialize(VOID);
 
 /* FUNCTIONS ******************************************************************/
 
@@ -38,9 +53,45 @@ NTSTATUS
 NTAPI
 IopInitializeArbiters(VOID)
 {
-     /* FIXME: TODO */
-    return STATUS_SUCCESS;
+    NTSTATUS Status;
+
+    Status = IopPortInitialize();
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("IopPortInitialize() return %X\n", Status);
+        return Status;
+    }
+
+    Status = IopMemInitialize();
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("IopMemInitialize() return %X\n", Status);
+        return Status;
+    }
+
+    Status = IopDmaInitialize();
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("IopDmaInitialize() return %X\n", Status);
+        return Status;
+    }
+
+    Status = IopIrqInitialize();
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("IopIrqInitialize() return %X\n", Status);
+        return Status;
+    }
+
+    Status = IopBusNumberInitialize();
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("IopBusNumberInitialize() return %X\n", Status);
+    }
+
+    return Status;
 }
+
 
 INIT_FUNCTION
 NTSTATUS
@@ -390,6 +441,7 @@ IopInitializePlugPlayServices(VOID)
     KeInitializeSpinLock(&IopDeviceTreeLock);
     KeInitializeSpinLock(&IopDeviceActionLock);
     InitializeListHead(&IopDeviceActionRequestList);
+    KeInitializeEvent(&PiEnumerationFinished, NotificationEvent, TRUE);
 
     /* Get the default interface */
     PnpDefaultInterfaceType = IopDetermineDefaultInterfaceType();
@@ -548,6 +600,9 @@ IopInitializePlugPlayServices(VOID)
 
     /* Close the handle to the control set */
     NtClose(KeyHandle);
+
+    /* Initialize PnP root relations (this is a syncronous operation) */
+    PiQueueDeviceAction(IopRootDeviceNode->PhysicalDeviceObject, PiActionEnumRootDevices, NULL, NULL);
 
     /* We made it */
     return STATUS_SUCCESS;

@@ -2638,12 +2638,12 @@ WSPGetSockOpt(IN SOCKET Handle,
 
                 case SO_RCVBUF:
                     Buffer = &Socket->SharedData->SizeOfRecvBuffer;
-                    BufferSize = sizeof(INT);
+                    BufferSize = sizeof(ULONG);
                     break;
 
                 case SO_SNDBUF:
                     Buffer = &Socket->SharedData->SizeOfSendBuffer;
-                    BufferSize = sizeof(INT);
+                    BufferSize = sizeof(ULONG);
                     break;
 
                 case SO_ACCEPTCONN:
@@ -2860,7 +2860,7 @@ WSPSetSockOpt(
               return NO_ERROR;
 
            case SO_SNDBUF:
-              if (optlen < sizeof(DWORD))
+              if (optlen < sizeof(ULONG))
               {
                   if (lpErrno) *lpErrno = WSAEFAULT;
                   return SOCKET_ERROR;
@@ -2884,11 +2884,15 @@ WSPSetSockOpt(
               return NO_ERROR;
 
            case SO_RCVBUF:
-              if (optlen < sizeof(DWORD))
+              if (optlen < sizeof(ULONG))
               {
                   if (lpErrno) *lpErrno = WSAEFAULT;
                   return SOCKET_ERROR;
               }
+
+              /* FIXME: We should not have to limit the packet receive buffer size like this. workaround for CORE-15804 */
+              if (*(PULONG)optval > 0x2000)
+                  *(PULONG)optval = 0x2000;
 
               SetSocketInformation(Socket,
                                    AFD_INFO_RECEIVE_WINDOW_SIZE,
@@ -2900,7 +2904,7 @@ WSPSetSockOpt(
               GetSocketInformation(Socket,
                                    AFD_INFO_RECEIVE_WINDOW_SIZE,
                                    NULL,
-                                   &Socket->SharedData->SizeOfSendBuffer,
+                                   &Socket->SharedData->SizeOfRecvBuffer,
                                    NULL,
                                    NULL,
                                    NULL);

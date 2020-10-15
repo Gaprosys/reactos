@@ -17,20 +17,20 @@
 #include <tchar.h>
 #include <shellapi.h>
 #include <shlobj.h>
+#include <shlwapi.h>
 #include <setupapi.h>
+#include <cpl.h>
 
 #include "resource.h"
 
 #define NUM_APPLETS (1)
-
-typedef LONG (CALLBACK *APPLET_INITPROC)(VOID);
 
 typedef struct _APPLET
 {
   int idIcon;
   int idName;
   int idDescription;
-  APPLET_INITPROC AppletProc;
+  APPLET_PROC AppletProc;
 } APPLET, *PAPPLET;
 
 extern HINSTANCE hApplet;

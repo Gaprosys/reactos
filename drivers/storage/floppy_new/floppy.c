@@ -28,7 +28,7 @@ Revision History:
 
 --*/
 
-#ifdef _MSC_VER
+#if !defined(__REACTOS__) || defined(_MSC_VER)
 #pragma warning(disable:4214) // nonstandard extension used : bit field types other than int
 #pragma warning(disable:4201) // nonstandard extension used : nameless struct/union
 #endif
@@ -45,6 +45,12 @@ Revision History:
 
 #include <ntstrsafe.h>
 #include <intsafe.h>
+
+#ifdef __REACTOS__
+// Downgrade unsupported NT6.2+ features.
+#define NonPagedPoolNx NonPagedPool
+#define NonPagedPoolNxCacheAligned NonPagedPoolCacheAligned
+#endif
 
 #define MODE_DATA_SIZE      192
 #define SCSI_FLOPPY_TIMEOUT  20
@@ -585,7 +591,7 @@ ScsiFlopUnload(
 // using #pragma.
 //
 
-#ifdef _MSC_VER
+#if !defined(__REACTOS__) || defined(_MSC_VER)
 #pragma warning(push)
 #pragma warning(disable:28152)
 #endif
@@ -699,7 +705,7 @@ Return Value:
         DeviceCount++;
 
         status = RtlStringCbPrintfA((PCCHAR) name,
-                                    sizeof(name)/sizeof(UCHAR),
+                                    sizeof(name),
                                     "\\Device\\Floppy%u",
                                     DeviceCount);
         if (NT_SUCCESS(status)) {
@@ -809,7 +815,7 @@ CreateFlopDeviceObjectExit:
     return status;
 
 } // end CreateFlopDeviceObject()
-#ifdef _MSC_VER
+#if !defined(__REACTOS__) || defined(_MSC_VER)
 #pragma warning(pop)
 #endif
 
@@ -834,11 +840,7 @@ ScsiFlopInitDevice(
     // Allocate request sense buffer.
     //
 
-#ifndef __REACTOS__
     senseData = ExAllocatePool(NonPagedPoolNxCacheAligned, SENSE_BUFFER_SIZE);
-#else
-    senseData = ExAllocatePool(NonPagedPoolCacheAligned, SENSE_BUFFER_SIZE);
-#endif
 
     if (senseData == NULL) {
 
@@ -934,7 +936,7 @@ ScsiFlopInitDevice(
     return (STATUS_SUCCESS);
 }
 
-#ifdef _MSC_VER
+#if !defined(__REACTOS__) || defined(_MSC_VER)
 #pragma warning(suppress:6262) // This function uses 1096 bytes of stack which exceed default value of 1024 bytes used by Code Analysis for flagging as warning
 #endif
 #ifdef __REACTOS__
@@ -974,7 +976,7 @@ NTSTATUS ScsiFlopStartDevice(
     //
 
     RtlStringCbPrintfW(ntNameBuffer,
-                       sizeof(ntNameBuffer)/sizeof(WCHAR),
+                       sizeof(ntNameBuffer),
                        L"\\Device\\Floppy%u",
                        fdoExtension->DeviceNumber);
 
@@ -1020,7 +1022,7 @@ NTSTATUS ScsiFlopStartDevice(
     if (NT_SUCCESS(status)) {
 
         RtlStringCbPrintfW(arcNameBuffer,
-                           sizeof(arcNameBuffer)/sizeof(WCHAR),
+                           sizeof(arcNameBuffer),
                            L"\\ArcName\\scsi(%u)disk(%u)fdisk(%u)",
                            scsiAddress.PortNumber,
                            scsiAddress.TargetId,
@@ -1042,7 +1044,7 @@ NTSTATUS ScsiFlopStartDevice(
     //
 
     RtlStringCbPrintfW(arcNameBuffer,
-                       sizeof(arcNameBuffer)/sizeof(WCHAR),
+                       sizeof(arcNameBuffer),
                        L"\\ArcName\\multi(%u)disk(%u)fdisk(%u)",
                        0,
                        0,
@@ -1160,11 +1162,7 @@ Return Value:
     //
     Irp->IoStatus.Information = 0;
 
-#ifndef __REACTOS__
     srb = ExAllocatePool(NonPagedPoolNx, SCSI_REQUEST_BLOCK_SIZE);
-#else
-    srb = ExAllocatePool(NonPagedPool, SCSI_REQUEST_BLOCK_SIZE);
-#endif
 
     if (srb == NULL) {
 
@@ -1530,11 +1528,7 @@ Return Value:
         // Determine if the device is writable.
         //
 
-#ifndef __REACTOS__
         modeData = ExAllocatePool(NonPagedPoolNxCacheAligned, MODE_DATA_SIZE);
-#else
-        modeData = ExAllocatePool(NonPagedPoolCacheAligned, MODE_DATA_SIZE);
-#endif
 
         if (modeData == NULL) {
             status = STATUS_INSUFFICIENT_RESOURCES;
@@ -1845,20 +1839,12 @@ Return Value:
             // Allocate a Srb for the read command.
             //
 
-#ifndef __REACTOS__
             readData = ExAllocatePool(NonPagedPoolNx, geometry->BytesPerSector);
-#else
-            readData = ExAllocatePool(NonPagedPool, geometry->BytesPerSector);
-#endif
             if (readData == NULL) {
                 return STATUS_NO_MEMORY;
             }
 
-#ifndef __REACTOS__
             srb = ExAllocatePool(NonPagedPoolNx, SCSI_REQUEST_BLOCK_SIZE);
-#else
-            srb = ExAllocatePool(NonPagedPool, SCSI_REQUEST_BLOCK_SIZE);
-#endif
 
             if (srb == NULL) {
 
@@ -1948,11 +1934,7 @@ Return Value:
         return(diskData->DriveType);
     }
 
-#ifndef __REACTOS__
     modeData = ExAllocatePool(NonPagedPoolNxCacheAligned, MODE_DATA_SIZE);
-#else
-    modeData = ExAllocatePool(NonPagedPoolCacheAligned, MODE_DATA_SIZE);
-#endif
 
     if (modeData == NULL) {
         return(DRIVE_TYPE_NONE);
@@ -2146,7 +2128,7 @@ Return Value:
 
 
      // driveMediaType is bounded below by DriveMediaLimits[].LowestDriveMediaType
-#ifdef _MSC_VER
+#if !defined(__REACTOS__) || defined(_MSC_VER)
 #pragma warning(push)
 #pragma warning(disable:33010) // 33010: Enum used as array index may be negative
 #endif
@@ -2176,7 +2158,7 @@ Return Value:
             return TRUE;
         }
     }
-#ifdef _MSC_VER
+#if !defined(__REACTOS__) || defined(_MSC_VER)
 #pragma warning(pop)
 #endif
 }
@@ -2217,11 +2199,7 @@ Return Value:
 
     PAGED_CODE();
 
-#ifndef __REACTOS__
     modeData = ExAllocatePool(NonPagedPoolNxCacheAligned, MODE_DATA_SIZE);
-#else
-    modeData = ExAllocatePool(NonPagedPoolCacheAligned, MODE_DATA_SIZE);
-#endif
 
     if (modeData == NULL) {
         return(STATUS_INSUFFICIENT_RESOURCES);
@@ -2320,11 +2298,7 @@ Return Value:
         // Allocate a Srb for the format command.
         //
 
-#ifndef __REACTOS__
         srb = ExAllocatePool(NonPagedPoolNx, SCSI_REQUEST_BLOCK_SIZE);
-#else
-        srb = ExAllocatePool(NonPagedPool, SCSI_REQUEST_BLOCK_SIZE);
-#endif
 
         if (srb == NULL) {
 
@@ -2384,11 +2358,7 @@ Return Value:
         // Allocate a Srb for the format command.
         //
 
-#ifndef __REACTOS__
         srb = ExAllocatePool(NonPagedPoolNx, SCSI_REQUEST_BLOCK_SIZE);
-#else
-        srb = ExAllocatePool(NonPagedPool, SCSI_REQUEST_BLOCK_SIZE);
-#endif
 
         if (srb == NULL) {
             return(STATUS_INSUFFICIENT_RESOURCES);
@@ -2514,13 +2484,8 @@ Return Value:
 
             DebugPrint((2,"Sending SCSIOP_START_STOP_UNIT\n"));
 
-#ifndef __REACTOS__
             context = ExAllocatePool(NonPagedPoolNx,
                                      sizeof(COMPLETION_CONTEXT));
-#else
-            context = ExAllocatePool(NonPagedPool,
-                                     sizeof(COMPLETION_CONTEXT));
-#endif
 
             if (context == NULL) {
 
@@ -2599,11 +2564,7 @@ Return Value:
         context = NULL;
 
         if (!overFlow) {
-#ifndef __REACTOS__
             context = ExAllocatePool(NonPagedPoolNx, sizeNeeded);
-#else
-            context = ExAllocatePool(NonPagedPool, sizeNeeded);
-#endif
         }
 
         if (context == NULL) {
@@ -2765,11 +2726,7 @@ Return Value:
         driveMediaConstants->SectorsPerTrack *
         driveMediaConstants->BytesPerSector;
 
-#ifndef __REACTOS__
     buffer = ExAllocatePool(NonPagedPoolNxCacheAligned, length);
-#else
-    buffer = ExAllocatePool(NonPagedPoolCacheAligned, length);
-#endif
 
     if (buffer == NULL) {
         return(STATUS_INSUFFICIENT_RESOURCES);
@@ -3051,11 +3008,7 @@ Return Value:
 
     // Allocate an SRB for the SCSIOP_READ_FORMATTED_CAPACITY request
     //
-#ifndef __REACTOS__
     srb = ExAllocatePool(NonPagedPoolNx, SCSI_REQUEST_BLOCK_SIZE);
-#else
-    srb = ExAllocatePool(NonPagedPool, SCSI_REQUEST_BLOCK_SIZE);
-#endif
 
     if (srb == NULL)
     {
@@ -3071,11 +3024,7 @@ Return Value:
 
     ASSERT(dataTransferLength < 0x100);
 
-#ifndef __REACTOS__
     dataBuffer = ExAllocatePool(NonPagedPoolNx, dataTransferLength);
-#else
-    dataBuffer = ExAllocatePool(NonPagedPool, dataTransferLength);
-#endif
 
     if (dataBuffer == NULL)
     {
@@ -3425,11 +3374,7 @@ Return Value:
 
     // Allocate an SRB for the SCSIOP_FORMAT_UNIT request
     //
-#ifndef __REACTOS__
     srb = ExAllocatePool(NonPagedPoolNx, SCSI_REQUEST_BLOCK_SIZE);
-#else
-    srb = ExAllocatePool(NonPagedPool, SCSI_REQUEST_BLOCK_SIZE);
-#endif
 
     if (srb == NULL)
     {
@@ -3438,13 +3383,8 @@ Return Value:
 
     // Allocate a transfer buffer for the SCSIOP_FORMAT_UNIT parameter list
     //
-#ifndef __REACTOS__
     parameterList = ExAllocatePool(NonPagedPoolNx,
                                    sizeof(FORMAT_UNIT_PARAMETER_LIST));
-#else
-    parameterList = ExAllocatePool(NonPagedPool,
-                                   sizeof(FORMAT_UNIT_PARAMETER_LIST));
-#endif
 
     if (parameterList == NULL)
     {
@@ -3573,4 +3513,3 @@ Return Value:
 
     return status;
 }
-

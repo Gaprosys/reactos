@@ -285,7 +285,9 @@ public:
             TBSTYLE_TOOLTIPS | TBSTYLE_WRAPABLE | TBSTYLE_LIST | TBSTYLE_TRANSPARENT |
             CCS_TOP | CCS_NORESIZE | CCS_NODIVIDER;
 
-        return SubclassWindow(CToolbar::Create(hWndParent, styles));
+        HWND toolbar = CToolbar::Create(hWndParent, styles);
+        SetDrawTextFlags(DT_NOPREFIX, DT_NOPREFIX);
+        return SubclassWindow(toolbar);
     }
 };
 
@@ -1531,6 +1533,10 @@ public:
             break;
 
         case HSHELL_ACTIVATESHELLWINDOW:
+            ::SwitchToThisWindow(m_Tray->GetHWND(), TRUE);
+            ::SetForegroundWindow(m_Tray->GetHWND());
+            break;
+
         case HSHELL_LANGUAGE:
         case HSHELL_SYSMENU:
         case HSHELL_ENDTASK:

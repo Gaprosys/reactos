@@ -572,7 +572,6 @@ MmDeleteProcessAddressSpace(PEPROCESS Process)
 {
 #ifndef _M_AMD64
     KIRQL OldIrql;
-    PVOID Address;
 #endif
 
     DPRINT("MmDeleteProcessAddressSpace(Process %p (%s))\n", Process,
@@ -591,7 +590,9 @@ MmDeleteProcessAddressSpace(PEPROCESS Process)
 #if (_MI_PAGING_LEVELS == 2)
     {
         KIRQL OldIrql;
+        PVOID Address;
         PMMPDE pointerPde;
+
         /* Attach to Process */
         KeAttachProcess(&Process->Pcb);
 
@@ -599,8 +600,8 @@ MmDeleteProcessAddressSpace(PEPROCESS Process)
         OldIrql = MiAcquirePfnLock();
 
         for (Address = MI_LOWEST_VAD_ADDRESS;
-                Address < MM_HIGHEST_VAD_ADDRESS;
-                Address =(PVOID)((ULONG_PTR)Address + (PAGE_SIZE * PTE_COUNT)))
+             Address < MM_HIGHEST_VAD_ADDRESS;
+             Address = (PVOID)((ULONG_PTR)Address + (PTE_PER_PAGE * PAGE_SIZE)))
         {
             /* At this point all references should be dead */
             if (MiQueryPageTableReferences(Address) != 0)

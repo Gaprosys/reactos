@@ -79,6 +79,7 @@ list(APPEND SOURCE
     msxml.idl
     msxml2.idl
     msxml6.idl
+    natupnp.idl
     netcon.idl
     netfw.idl
     oaidl.idl
@@ -125,7 +126,9 @@ list(APPEND SOURCE
     urlmon.idl
     vmr9.idl
 #   vmrender.idl
+    vsbackup.idl
     vss.idl
+    vswriter.idl
     wbemcli.idl
     wbemdisp.idl
     wbemprov.idl

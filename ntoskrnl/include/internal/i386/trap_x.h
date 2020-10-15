@@ -9,12 +9,7 @@
 #pragma once
 
 #if defined(_MSC_VER)
-#define UNREACHABLE   __assume(0)
 #define               __builtin_expect(a,b) (a)
-#elif defined(__GNUC__)
-#define UNREACHABLE   __builtin_unreachable()
-#else
-#error
 #endif
 
 //
@@ -349,8 +344,12 @@ FORCEINLINE
 VOID
 KiEnterV86Trap(IN PKTRAP_FRAME TrapFrame)
 {
-    /* Save exception list */
-    TrapFrame->ExceptionList = KeGetPcr()->NtTib.ExceptionList;
+    PVOID ExceptionList;
+
+    /* Check exception list */
+    ExceptionList = KeGetPcr()->NtTib.ExceptionList;
+    ASSERTMSG("V86 trap handler must not register an SEH frame\n",
+              ExceptionList == TrapFrame->ExceptionList);
 
     /* Save DR7 and check for debugging */
     TrapFrame->Dr7 = __readdr(7);
@@ -368,8 +367,12 @@ FORCEINLINE
 VOID
 KiEnterInterruptTrap(IN PKTRAP_FRAME TrapFrame)
 {
-    /* Save exception list and terminate it */
-    TrapFrame->ExceptionList = KeGetPcr()->NtTib.ExceptionList;
+    PVOID ExceptionList;
+
+    /* Check exception list and terminate it */
+    ExceptionList = KeGetPcr()->NtTib.ExceptionList;
+    ASSERTMSG("Interrupt handler must not register an SEH frame\n",
+              ExceptionList == TrapFrame->ExceptionList);
     KeGetPcr()->NtTib.ExceptionList = EXCEPTION_CHAIN_END;
 
     /* Default to debugging disabled */
@@ -398,8 +401,12 @@ FORCEINLINE
 VOID
 KiEnterTrap(IN PKTRAP_FRAME TrapFrame)
 {
-    /* Save exception list */
-    TrapFrame->ExceptionList = KeGetPcr()->NtTib.ExceptionList;
+    PVOID ExceptionList;
+
+    /* Check exception list */
+    ExceptionList = KeGetPcr()->NtTib.ExceptionList;
+    ASSERTMSG("Trap handler must not register an SEH frame\n",
+              ExceptionList == TrapFrame->ExceptionList);
 
     /* Default to debugging disabled */
     TrapFrame->Dr7 = 0;

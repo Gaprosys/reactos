@@ -149,7 +149,8 @@ BOOL hasArp( HANDLE tcpFile, TDIEntityID *arp_maybe ) {
                               NULL );
     if( !NT_SUCCESS(status) ) return FALSE;
 
-    return (type & AT_ARP);
+    /* AT_ARP corresponds to an individual TDI entity type */
+    return (type == AT_ARP);
 }
 
 static NTSTATUS getInterfaceInfoSet( HANDLE tcpFile,
@@ -246,8 +247,7 @@ static DWORD getNumInterfacesInt(BOOL onlyNonLoopback)
 
     for( i = 0; i < numEntities; i++ ) {
         if( isInterface( &entitySet[i] ) &&
-            (!onlyNonLoopback ||
-             (onlyNonLoopback && !isLoopback( tcpFile, &entitySet[i] ))) )
+            (!onlyNonLoopback || !isLoopback( tcpFile, &entitySet[i] )) )
             numInterfaces++;
     }
 

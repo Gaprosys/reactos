@@ -227,6 +227,13 @@ OutputHeader_stub(FILE *file)
         fprintf(file, "WINE_DECLARE_DEBUG_CHANNEL(relay);\n");
     }
 
+    /* __int128 is not supported on x86, so use a custom type */
+    fprintf(file, "\n"
+                  "typedef struct {\n"
+                  "    __int64 lower;\n"
+                  "    __int64 upper;\n"
+                  "} MyInt128;\n");
+
     fprintf(file, "\n");
 }
 
@@ -297,15 +304,15 @@ OutputLine_stub(FILE *file, EXPORT *pexp)
             if (i != 0) fprintf(file, ", ");
             switch (pexp->anArgs[i])
             {
-                case ARG_LONG: fprintf(file, "long"); break;
-                case ARG_PTR:  fprintf(file, "void*"); break;
-                case ARG_STR:  fprintf(file, "char*"); break;
-                case ARG_WSTR: fprintf(file, "wchar_t*"); break;
-                case ARG_DBL:  fprintf(file, "double"); break;
-                case ARG_INT64 :  fprintf(file, "__int64"); break;
-                /* __int128 is not supported on x86, and int128 in spec files most often represents a GUID */
-                case ARG_INT128 :  fprintf(file, "GUID"); break;
-                case ARG_FLOAT: fprintf(file, "float"); break;
+                case ARG_LONG:   fprintf(file, "long");     break;
+                case ARG_PTR:    fprintf(file, "void*");    break;
+                case ARG_STR:    fprintf(file, "char*");    break;
+                case ARG_WSTR:   fprintf(file, "wchar_t*"); break;
+                case ARG_DBL:    fprintf(file, "double");   break;
+                case ARG_INT64:  fprintf(file, "__int64");  break;
+                /* __int128 is not supported on x86, so use a custom type */
+                case ARG_INT128: fprintf(file, "MyInt128"); break;
+                case ARG_FLOAT:  fprintf(file, "float");    break;
             }
             fprintf(file, " a%d", i);
         }
@@ -345,14 +352,14 @@ OutputLine_stub(FILE *file, EXPORT *pexp)
         if (i != 0) fprintf(file, ",");
         switch (pexp->anArgs[i])
         {
-            case ARG_LONG: fprintf(file, "0x%%lx"); break;
-            case ARG_PTR:  fprintf(file, "0x%%p"); break;
-            case ARG_STR:  fprintf(file, "'%%s'"); break;
-            case ARG_WSTR: fprintf(file, "'%%ws'"); break;
-            case ARG_DBL:  fprintf(file, "%%f"); break;
-            case ARG_INT64: fprintf(file, "%%\"PRIx64\""); break;
-            case ARG_INT128: fprintf(file, "'%%s'"); break;
-            case ARG_FLOAT: fprintf(file, "%%f"); break;
+            case ARG_LONG:   fprintf(file, "0x%%lx"); break;
+            case ARG_PTR:    fprintf(file, "0x%%p");  break;
+            case ARG_STR:    fprintf(file, "'%%s'");  break;
+            case ARG_WSTR:   fprintf(file, "'%%ws'"); break;
+            case ARG_DBL:    fprintf(file, "%%f");    break;
+            case ARG_INT64:  fprintf(file, "0x%%\"PRIx64\""); break;
+            case ARG_INT128: fprintf(file, "0x%%\"PRIx64\"-0x%%\"PRIx64\""); break;
+            case ARG_FLOAT:  fprintf(file, "%%f");    break;
         }
     }
     fprintf(file, ")\\n\"");
@@ -362,14 +369,13 @@ OutputLine_stub(FILE *file, EXPORT *pexp)
         fprintf(file, ", ");
         switch (pexp->anArgs[i])
         {
-            case ARG_LONG: fprintf(file, "(long)a%d", i); break;
-            case ARG_PTR:  fprintf(file, "(void*)a%d", i); break;
-            case ARG_STR:  fprintf(file, "(char*)a%d", i); break;
-            case ARG_WSTR: fprintf(file, "(wchar_t*)a%d", i); break;
-            case ARG_DBL:  fprintf(file, "(double)a%d", i); break;
-            case ARG_INT64: fprintf(file, "(__int64)a%d", i); break;
-            case ARG_INT128: fprintf(file, "wine_dbgstr_guid(&a%d)", i); break;
-            case ARG_FLOAT: fprintf(file, "(float)a%d", i); break;
+            case ARG_LONG: case ARG_PTR: case ARG_STR:
+            case ARG_WSTR: case ARG_DBL: case ARG_INT64:
+                fprintf(file, "a%d", i); break;
+            case ARG_INT128:
+                fprintf(file, "a%d.lower, a%d.upper", i, i); break;
+            case ARG_FLOAT:
+                fprintf(file, "a%d", i); break;
         }
     }
     fprintf(file, ");\n");
@@ -404,7 +410,7 @@ OutputLine_stub(FILE *file, EXPORT *pexp)
     {
         if (pexp->uFlags & FL_RET64)
         {
-            fprintf(file, "\tif (TRACE_ON(relay))\n\t\tDPRINTF(\"%s: %.*s: retval = %%\"PRIx64\"\\n\", retval);\n",
+            fprintf(file, "\tif (TRACE_ON(relay))\n\t\tDPRINTF(\"%s: %.*s: retval = 0x%%\"PRIx64\"\\n\", retval);\n",
                     pszDllName, pexp->strName.len, pexp->strName.buf);
         }
         else
@@ -732,7 +738,8 @@ OutputLine_def(FILE *fileDest, EXPORT *pexp)
     else
         OutputLine_def_GCC(fileDest, pexp);
 
-    if (pexp->uFlags & FL_ORDINAL)
+    /* On GCC builds we force ordinals */
+    if ((pexp->uFlags & FL_ORDINAL) || (!gbMSComp && !gbImportLib))
     {
         fprintf(fileDest, " @%d", pexp->nOrdinal);
     }
@@ -772,7 +779,7 @@ Fatalv(
 
     /* Get the length of the line */
     pcLineEnd = strpbrk(pcLine, "\r\n");
-    len = pcLineEnd - pcLine;
+    len = (unsigned)(pcLineEnd - pcLine);
 
     if (pc == NULL)
     {
@@ -1299,6 +1306,52 @@ ParseFile(char* pcStart, FILE *fileDest, unsigned *cExports)
     return pexports;
 }
 
+int
+ApplyOrdinals(EXPORT* pexports, unsigned cExports)
+{
+    unsigned short i, j;
+    char* used;
+
+    /* Allocate a table to mark used ordinals */
+    used = malloc(65536);
+    if (used == NULL)
+    {
+        fprintf(stderr, "Failed to allocate memory for ordinal use table\n");
+        return -1;
+    }
+    memset(used, 0, 65536);
+
+    /* Pass 1: mark the ordinals that are already used */
+    for (i = 0; i < cExports; i++)
+    {
+        if (pexports[i].uFlags & FL_ORDINAL)
+        {
+            if (used[pexports[i].nOrdinal] != 0)
+            {
+                fprintf(stderr, "Found duplicate ordinal: %u\n", pexports[i].nOrdinal);
+                return -1;
+            }
+            used[pexports[i].nOrdinal] = 1;
+        }
+    }
+
+    /* Pass 2: apply available ordinals */
+    for (i = 0, j = 1; i < cExports; i++)
+    {
+        if ((pexports[i].uFlags & FL_ORDINAL) == 0 && pexports[i].bVersionIncluded)
+        {
+            while (used[j] != 0)
+                j++;
+
+            pexports[i].nOrdinal = j;
+            used[j] = 1;
+        }
+    }
+
+    free(used);
+    return 0;
+}
+
 void usage(void)
 {
     printf("syntax: spec2def [<options> ...] <spec file>\n"
@@ -1465,8 +1518,17 @@ int main(int argc, char *argv[])
     pexports = ParseFile(pszSource, file, &cExports);
     if (pexports == NULL)
     {
-        fprintf(stderr, "Failed to allocate memory for export data!\n");
+        fprintf(stderr, "error: could not parse file!\n");
         return -1;
+    }
+
+    if (!gbMSComp)
+    {
+        if (ApplyOrdinals(pexports, cExports) < 0)
+        {
+            fprintf(stderr, "error: could not apply ordinals!\n");
+            return -1;
+        }
     }
 
     if (pszDefFileName)

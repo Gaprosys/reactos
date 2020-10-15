@@ -85,6 +85,7 @@
 
 #ifndef _MINIHAL_
 static KEVENT HalpDmaLock;
+static KSPIN_LOCK HalpDmaAdapterListLock;
 static LIST_ENTRY HalpDmaAdapterList;
 static PADAPTER_OBJECT HalpEisaAdapter[8];
 #endif
@@ -132,6 +133,24 @@ static DMA_OPERATIONS HalpDmaOperations = {
 
 /* FUNCTIONS *****************************************************************/
 
+#if defined(SARCH_PC98)
+/*
+ * Disable I/O for safety.
+ * FIXME: Add support for PC-98 DMA controllers.
+ */
+#undef WRITE_PORT_UCHAR
+#undef READ_PORT_UCHAR
+
+#define WRITE_PORT_UCHAR(Port, Data) \
+    do { \
+        UNIMPLEMENTED; \
+        (Port); \
+        (Data); \
+    } while (0)
+
+#define READ_PORT_UCHAR(Port) 0x00
+#endif
+
 #ifndef _MINIHAL_
 INIT_FUNCTION
 VOID
@@ -165,6 +184,7 @@ HalpInitDma(VOID)
      * first map buffers.
      */
     InitializeListHead(&HalpDmaAdapterList);
+    KeInitializeSpinLock(&HalpDmaAdapterListLock);
     KeInitializeEvent(&HalpDmaLock, NotificationEvent, TRUE);
     HalpMasterAdapter = HalpDmaAllocateMasterAdapter();
 
@@ -621,6 +641,7 @@ HalGetAdapter(IN PDEVICE_DESCRIPTION DeviceDescription,
     BOOLEAN EisaAdapter;
     ULONG MapRegisters;
     ULONG MaximumLength;
+    KIRQL OldIrql;
 
     /* Validate parameters in device description */
     if (DeviceDescription->Version > DEVICE_DESCRIPTION_VERSION2) return NULL;
@@ -688,8 +709,7 @@ HalGetAdapter(IN PDEVICE_DESCRIPTION DeviceDescription,
     }
 
     /*
-     * Acquire the DMA lock that is used to protect adapter lists and
-     * EISA adapter array.
+     * Acquire the DMA lock that is used to protect the EISA adapter array.
      */
     KeWaitForSingleObject(&HalpDmaLock, Executive, KernelMode, FALSE, NULL);
 
@@ -745,13 +765,19 @@ HalGetAdapter(IN PDEVICE_DESCRIPTION DeviceDescription,
         }
     }
 
-    if (!EisaAdapter) InsertTailList(&HalpDmaAdapterList, &AdapterObject->AdapterList);
-
     /*
-     * Release the DMA lock. HalpDmaAdapterList and HalpEisaAdapter will
-     * no longer be touched, so we don't need it.
+     * Release the DMA lock. HalpEisaAdapter will no longer be touched,
+     * so we don't need it.
      */
     KeSetEvent(&HalpDmaLock, 0, 0);
+
+    if (!EisaAdapter)
+    {
+        /* If it's not one of the static adapters, add it to the list */
+        KeAcquireSpinLock(&HalpDmaAdapterListLock, &OldIrql);
+        InsertTailList(&HalpDmaAdapterList, &AdapterObject->AdapterList);
+        KeReleaseSpinLock(&HalpDmaAdapterListLock, OldIrql);
+    }
 
     /*
      * Setup the values in the adapter object that are common for all
@@ -818,11 +844,12 @@ VOID
 NTAPI
 HalPutDmaAdapter(IN PADAPTER_OBJECT AdapterObject)
 {
+    KIRQL OldIrql;
     if (AdapterObject->ChannelNumber == 0xFF)
     {
-        KeWaitForSingleObject(&HalpDmaLock, Executive, KernelMode, FALSE, NULL);
+        KeAcquireSpinLock(&HalpDmaAdapterListLock, &OldIrql);
         RemoveEntryList(&AdapterObject->AdapterList);
-        KeSetEvent(&HalpDmaLock, 0, 0);
+        KeReleaseSpinLock(&HalpDmaAdapterListLock, OldIrql);
     }
 
     ObDereferenceObject(AdapterObject);

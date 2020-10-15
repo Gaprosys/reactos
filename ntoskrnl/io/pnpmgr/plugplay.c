@@ -64,6 +64,7 @@ IopQueueTargetDeviceEvent(const GUID *Guid,
                                 TotalSize + FIELD_OFFSET(PNP_EVENT_ENTRY, Event));
     if (!EventEntry)
         return STATUS_INSUFFICIENT_RESOURCES;
+    RtlZeroMemory(EventEntry, TotalSize + FIELD_OFFSET(PNP_EVENT_ENTRY, Event));
 
     /* Fill the buffer with the event GUID */
     RtlCopyMemory(&EventEntry->Event.EventGuid,
@@ -90,30 +91,6 @@ IopQueueTargetDeviceEvent(const GUID *Guid,
     return STATUS_SUCCESS;
 }
 
-
-/*
- * Remove the current PnP event from the tail of the event queue
- * and signal IopPnpNotifyEvent if there is yet another event in the queue.
- */
-static NTSTATUS
-IopRemovePlugPlayEvent(VOID)
-{
-    /* Remove a pnp event entry from the tail of the queue */
-    if (!IsListEmpty(&IopPnpEventQueueHead))
-    {
-        ExFreePool(CONTAINING_RECORD(RemoveTailList(&IopPnpEventQueueHead), PNP_EVENT_ENTRY, ListEntry));
-    }
-
-    /* Signal the next pnp event in the queue */
-    if (!IsListEmpty(&IopPnpEventQueueHead))
-    {
-        KeSetEvent(&IopPnpNotifyEvent,
-                   0,
-                   FALSE);
-    }
-
-    return STATUS_SUCCESS;
-}
 
 static PDEVICE_OBJECT
 IopTraverseDeviceNode(PDEVICE_NODE Node, PUNICODE_STRING DeviceInstance)
@@ -238,12 +215,40 @@ IopPnpEnumerateDevice(PPLUGPLAY_CONTROL_ENUMERATE_DEVICE_DATA DeviceData)
         return STATUS_NO_SUCH_DEVICE;
     }
 
-    Status = IopEnumerateDevice(DeviceObject);
+    Status = PiPerformSyncDeviceAction(DeviceObject, PiActionEnumDeviceTree);
 
     ObDereferenceObject(DeviceObject);
 
     return Status;
 }
+
+
+/*
+ * Remove the current PnP event from the tail of the event queue
+ * and signal IopPnpNotifyEvent if there is yet another event in the queue.
+ */
+static
+NTSTATUS
+IopRemovePlugPlayEvent(
+    _In_ PPLUGPLAY_CONTROL_USER_RESPONSE_DATA ResponseData)
+{
+    /* Remove a pnp event entry from the tail of the queue */
+    if (!IsListEmpty(&IopPnpEventQueueHead))
+    {
+        ExFreePool(CONTAINING_RECORD(RemoveTailList(&IopPnpEventQueueHead), PNP_EVENT_ENTRY, ListEntry));
+    }
+
+    /* Signal the next pnp event in the queue */
+    if (!IsListEmpty(&IopPnpEventQueueHead))
+    {
+        KeSetEvent(&IopPnpNotifyEvent,
+                   0,
+                   FALSE);
+    }
+
+    return STATUS_SUCCESS;
+}
+
 
 static NTSTATUS
 IopGetInterfaceDeviceList(PPLUGPLAY_CONTROL_INTERFACE_DEVICE_LIST_DATA DeviceList)
@@ -1032,8 +1037,7 @@ static NTSTATUS
 IopResetDevice(PPLUGPLAY_CONTROL_RESET_DEVICE_DATA ResetDeviceData)
 {
     PDEVICE_OBJECT DeviceObject;
-    PDEVICE_NODE DeviceNode;
-    NTSTATUS Status = STATUS_SUCCESS;
+    NTSTATUS Status;
     UNICODE_STRING DeviceInstance;
 
     Status = IopCaptureUnicodeString(&DeviceInstance, &ResetDeviceData->DeviceInstance);
@@ -1055,48 +1059,7 @@ IopResetDevice(PPLUGPLAY_CONTROL_RESET_DEVICE_DATA ResetDeviceData)
         return STATUS_NO_SUCH_DEVICE;
     }
 
-    /* Get the device node */
-    DeviceNode = IopGetDeviceNode(DeviceObject);
-
-    ASSERT(DeviceNode->Flags & DNF_ENUMERATED);
-    ASSERT(DeviceNode->Flags & DNF_PROCESSED);
-
-    /* Check if there's already a driver loaded for this device */
-    if (DeviceNode->Flags & DNF_ADDED)
-    {
-#if 0
-        /* Remove the device node */
-        Status = IopRemoveDevice(DeviceNode);
-        if (NT_SUCCESS(Status))
-        {
-            /* Invalidate device relations for the parent to reenumerate the device */
-            DPRINT1("A new driver will be loaded for '%wZ' (FDO above removed)\n", &DeviceNode->InstancePath);
-            Status = IoSynchronousInvalidateDeviceRelations(DeviceNode->Parent->PhysicalDeviceObject, BusRelations);
-        }
-        else
-#endif
-        {
-            /* A driver has already been loaded for this device */
-            DPRINT("A reboot is required for the current driver for '%wZ' to be replaced\n", &DeviceNode->InstancePath);
-            DeviceNode->Problem = CM_PROB_NEED_RESTART;
-        }
-    }
-    else
-    {
-        /* FIXME: What if the device really is disabled? */
-        DeviceNode->Flags &= ~DNF_DISABLED;
-        DeviceNode->Problem = 0;
-
-        /* Load service data from the registry */
-        Status = IopActionConfigureChildServices(DeviceNode, DeviceNode->Parent);
-
-        if (NT_SUCCESS(Status))
-        {
-            /* Start the service and begin PnP initialization of the device again */
-            DPRINT("A new driver will be loaded for '%wZ' (no FDO above)\n", &DeviceNode->InstancePath);
-            Status = IopActionInitChildServices(DeviceNode, DeviceNode->Parent);
-        }
-    }
+    Status = PiPerformSyncDeviceAction(DeviceObject, PiActionResetDevice);
 
     ObDereferenceObject(DeviceObject);
 
@@ -1348,7 +1311,7 @@ NtPlugPlayControl(IN PLUGPLAY_CONTROL_CLASS PlugPlayControlClass,
         case PlugPlayControlUserResponse:
             if (!Buffer || BufferLength < sizeof(PLUGPLAY_CONTROL_USER_RESPONSE_DATA))
                 return STATUS_INVALID_PARAMETER;
-            return IopRemovePlugPlayEvent();
+            return IopRemovePlugPlayEvent((PPLUGPLAY_CONTROL_USER_RESPONSE_DATA)Buffer);
 
 //        case PlugPlayControlGenerateLegacyDevice:
 

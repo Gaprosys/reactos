@@ -57,6 +57,20 @@ typedef struct
    to call TrackPopupMenu and let it use the 0 value as an indication that the menu was canceled */
 #define CONTEXT_MENU_BASE_ID 1
 
+/* Convert client coordinates to listview coordinates */
+static void
+ClientToListView(HWND hwndLV, POINT *ppt)
+{
+    POINT Origin;
+
+    /* FIXME: LVM_GETORIGIN is broken. See CORE-17266 */
+    if (!ListView_GetOrigin(hwndLV, &Origin))
+        return;
+
+    ppt->x += Origin.x;
+    ppt->y += Origin.y;
+}
+
 class CDefView :
     public CWindowImpl<CDefView, CWindow, CControlWinTraits>,
     public CComObjectRootEx<CComMultiThreadModelNoCS>,
@@ -116,6 +130,9 @@ class CDefView :
         HRESULT _MergeToolbar();
         BOOL _Sort();
         HRESULT _DoFolderViewCB(UINT uMsg, WPARAM wParam, LPARAM lParam);
+        HRESULT _GetSnapToGrid();
+        void _MoveSelectionOnAutoArrange(POINT pt);
+        INT _FindInsertableIndexFromPoint(POINT pt);
 
     public:
         CDefView();
@@ -129,7 +146,6 @@ class CDefView :
         BOOL CreateList();
         void UpdateListColors();
         BOOL InitList();
-        HRESULT DefMessageSFVCB(UINT uMsg, WPARAM wParam, LPARAM lParam);
         static INT CALLBACK ListViewCompareItems(LPARAM lParam1, LPARAM lParam2, LPARAM lpData);
 
         PCUITEMID_CHILD _PidlByItem(int i);
@@ -396,6 +412,8 @@ CDefView::~CDefView()
 {
     TRACE(" destroying IShellView(%p)\n", this);
 
+    _DoFolderViewCB(SFVM_VIEWRELEASE, 0, 0);
+
     if (m_viewinfo_data.hbmBack)
     {
         ::DeleteObject(m_viewinfo_data.hbmBack);
@@ -536,7 +554,7 @@ BOOL CDefView::CreateList()
         dwStyle |= LVS_ALIGNTOP | LVS_SHOWSELALWAYS;
 
     ViewMode = m_FolderSettings.ViewMode;
-    hr = _DoFolderViewCB(SFVM_DEFVIEWMODE, NULL, (LPARAM)&ViewMode);
+    hr = _DoFolderViewCB(SFVM_DEFVIEWMODE, 0, (LPARAM)&ViewMode);
     if (SUCCEEDED(hr))
     {
         if (ViewMode >= FVM_FIRST && ViewMode <= FVM_LAST)
@@ -570,6 +588,9 @@ BOOL CDefView::CreateList()
 
     if (m_FolderSettings.fFlags & FWF_AUTOARRANGE)
         dwStyle |= LVS_AUTOARRANGE;
+
+    if (m_FolderSettings.fFlags & FWF_SNAPTOGRID)
+        dwExStyle |= LVS_EX_SNAPTOGRID;
 
     if (m_FolderSettings.fFlags & FWF_DESKTOP)
         m_FolderSettings.fFlags |= FWF_NOCLIENTEDGE | FWF_NOSCROLL;
@@ -778,12 +799,8 @@ int CDefView::LV_FindItemByPidl(PCUITEMID_CHILD pidl)
     for (int i = 0; i<cItems; i++)
     {
         PCUITEMID_CHILD currentpidl = _PidlByItem(i);
-        HRESULT hr = m_pSFParent->CompareIDs(0, pidl, currentpidl);
-
-        if (SUCCEEDED(hr) && !HRESULT_CODE(hr))
-        {
+        if (ILIsEqual(pidl, currentpidl))
             return i;
-        }
     }
     return -1;
 }
@@ -796,6 +813,9 @@ int CDefView::LV_AddItem(PCUITEMID_CHILD pidl)
     LVITEMW lvItem;
 
     TRACE("(%p)(pidl=%p)\n", this, pidl);
+
+    if (_DoFolderViewCB(SFVM_ADDINGOBJECT, 0, (LPARAM)pidl) == S_FALSE)
+        return -1;
 
     lvItem.mask = LVIF_TEXT | LVIF_IMAGE | LVIF_PARAM;    /*set the mask*/
     lvItem.iItem = m_ListView.GetItemCount();             /*add the item to the end of the list*/
@@ -819,7 +839,7 @@ BOOLEAN CDefView::LV_DeleteItem(PCUITEMID_CHILD pidl)
 
     nIndex = LV_FindItemByPidl(pidl);
 
-    return (-1 == m_ListView.DeleteItem(nIndex)) ? FALSE : TRUE;
+    return m_ListView.DeleteItem(nIndex);
 }
 
 /**********************************************************
@@ -842,10 +862,11 @@ BOOLEAN CDefView::LV_RenameItem(PCUITEMID_CHILD pidlOld, PCUITEMID_CHILD pidlNew
         m_ListView.GetItem(&lvItem);
 
         SHFree(reinterpret_cast<LPVOID>(lvItem.lParam));
-        lvItem.mask = LVIF_PARAM|LVIF_IMAGE;
+        lvItem.mask = LVIF_PARAM | LVIF_IMAGE | LVIF_TEXT;
         lvItem.iItem = nItem;
         lvItem.iSubItem = 0;
         lvItem.lParam = reinterpret_cast<LPARAM>(ILClone(pidlNew));    /* set the item's data */
+        lvItem.pszText = LPSTR_TEXTCALLBACKW;
         lvItem.iImage = SHMapPIDLToSystemImageListIndex(m_pSFParent, pidlNew, 0);
         m_ListView.SetItem(&lvItem);
         m_ListView.Update(nItem);
@@ -908,29 +929,32 @@ HRESULT CDefView::FillList()
     DWORD         dwFetched;
     HRESULT       hRes;
     HDPA          hdpa;
-    HKEY          hKey;
     DWORD         dFlags = SHCONTF_NONFOLDERS | SHCONTF_FOLDERS;
+    DWORD dwValue, cbValue;
 
     TRACE("%p\n", this);
 
     /* determine if there is a setting to show all the hidden files/folders */
-    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced", 0, KEY_QUERY_VALUE, &hKey) == ERROR_SUCCESS)
+    dwValue = 1;
+    cbValue = sizeof(dwValue);
+    SHGetValueW(HKEY_CURRENT_USER,
+                L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+                L"Hidden", NULL, &dwValue, &cbValue);
+    if (dwValue == 1)
     {
-        DWORD dataLength, flagVal;
+        dFlags |= SHCONTF_INCLUDEHIDDEN;
+        m_ListView.SendMessageW(LVM_SETCALLBACKMASK, LVIS_CUT, 0);
+    }
 
-        dataLength = sizeof(flagVal);
-        if (RegQueryValueExW(hKey, L"Hidden", NULL, NULL, (LPBYTE)&flagVal, &dataLength) == ERROR_SUCCESS)
-        {
-            /* if the value is 1, then show all hidden files/folders */
-            if (flagVal == 1)
-            {
-                dFlags |= SHCONTF_INCLUDEHIDDEN;
-                m_ListView.SendMessageW(LVM_SETCALLBACKMASK, LVIS_CUT, 0);
-            }
-        }
-
-        /* close the key */
-        RegCloseKey(hKey);
+    dwValue = 0;
+    cbValue = sizeof(dwValue);
+    SHGetValueW(HKEY_CURRENT_USER,
+                L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+                L"ShowSuperHidden", NULL, &dwValue, &cbValue);
+    if (dwValue)
+    {
+        dFlags |= SHCONTF_INCLUDESUPERHIDDEN;
+        m_ListView.SendMessageW(LVM_SETCALLBACKMASK, LVIS_CUT, 0);
     }
 
     /* get the itemlist from the shfolder */
@@ -996,7 +1020,7 @@ HRESULT CDefView::FillList()
         m_ListView.InvalidateRect(NULL, TRUE);
     }
 
-    _DoFolderViewCB(SFVM_LISTREFRESHED, NULL, NULL);
+    _DoFolderViewCB(SFVM_LISTREFRESHED, 0, 0);
 
     return S_OK;
 }
@@ -1126,7 +1150,6 @@ LRESULT CDefView::OnNCDestroy(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHa
 LRESULT CDefView::OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
 {
     CComPtr<IDropTarget>     pdt;
-    SHChangeNotifyEntry      ntreg;
     CComPtr<IPersistFolder2> ppf2;
 
     TRACE("%p\n", this);
@@ -1142,9 +1165,6 @@ LRESULT CDefView::OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandl
     if (ppf2)
     {
         ppf2->GetCurFolder(&m_pidlParent);
-        ntreg.fRecursive = TRUE;
-        ntreg.pidl = m_pidlParent;
-        m_hNotify = SHChangeNotifyRegister(m_hWnd, SHCNRF_InterruptLevel | SHCNRF_ShellLevel, SHCNE_ALLEVENTS, SHV_CHANGE_NOTIFY, 1, &ntreg);
     }
 
     if (CreateList())
@@ -1154,6 +1174,22 @@ LRESULT CDefView::OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandl
             FillList();
         }
     }
+
+    if (m_FolderSettings.fFlags & FWF_DESKTOP)
+    {
+        HWND hwndSB;
+        m_pShellBrowser->GetWindow(&hwndSB);
+        SetShellWindowEx(hwndSB, m_ListView);
+    }
+
+    SHChangeNotifyEntry ntreg[1];
+    ntreg[0].fRecursive = FALSE;
+    ntreg[0].pidl = m_pidlParent;
+    m_hNotify = SHChangeNotifyRegister(m_hWnd,
+                                       SHCNRF_InterruptLevel | SHCNRF_ShellLevel |
+                                       SHCNRF_NewDelivery,
+                                       SHCNE_ALLEVENTS, SHV_CHANGE_NOTIFY,
+                                       1, ntreg);
 
     /* _DoFolderViewCB(SFVM_GETNOTIFY, ??  ??) */
 
@@ -1204,8 +1240,11 @@ HRESULT CDefView::FillFileMenu()
             DeleteMenu(hFileMenu, i, MF_BYPOSITION);
     }
 
+    m_cidl = m_ListView.GetSelectedCount();
+
     /* Store the context menu in m_pCM and keep it in order to invoke the selected command later on */
-    HRESULT hr = GetItemObject(SVGIO_SELECTION, IID_PPV_ARG(IContextMenu, &m_pCM));
+    HRESULT hr = GetItemObject((m_cidl ? SVGIO_SELECTION : SVGIO_BACKGROUND),
+                               IID_PPV_ARG(IContextMenu, &m_pCM));
     if (FAILED_UNEXPECTEDLY(hr))
         return hr;
 
@@ -1275,13 +1314,22 @@ HRESULT CDefView::FillArrangeAsMenu(HMENU hmenuArrange)
     if (m_FolderSettings.ViewMode == FVM_DETAILS || m_FolderSettings.ViewMode == FVM_LIST)
     {
         EnableMenuItem(hmenuArrange, FCIDM_SHVIEW_AUTOARRANGE, MF_BYCOMMAND | MF_GRAYED);
+        EnableMenuItem(hmenuArrange, FCIDM_SHVIEW_ALIGNTOGRID, MF_BYCOMMAND | MF_GRAYED);
     }
     else
     {
-        EnableMenuItem(hmenuArrange, FCIDM_SHVIEW_AUTOARRANGE, MF_BYCOMMAND); 
+        EnableMenuItem(hmenuArrange, FCIDM_SHVIEW_AUTOARRANGE, MF_BYCOMMAND);
+        EnableMenuItem(hmenuArrange, FCIDM_SHVIEW_ALIGNTOGRID, MF_BYCOMMAND);
 
         if (GetAutoArrange() == S_OK)
             CheckMenuItem(hmenuArrange, FCIDM_SHVIEW_AUTOARRANGE, MF_CHECKED);
+        else
+            CheckMenuItem(hmenuArrange, FCIDM_SHVIEW_AUTOARRANGE, MF_UNCHECKED);
+
+        if (_GetSnapToGrid() == S_OK)
+            CheckMenuItem(hmenuArrange, FCIDM_SHVIEW_ALIGNTOGRID, MF_CHECKED);
+        else
+            CheckMenuItem(hmenuArrange, FCIDM_SHVIEW_ALIGNTOGRID, MF_UNCHECKED);
     }
 
 
@@ -1426,6 +1474,24 @@ LRESULT CDefView::OnContextMenu(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &b
     if (!m_hContextMenu) 
         return E_FAIL;
 
+    if (lParam != ~0)   // unless app key (menu key) was pressed
+    {
+        x = GET_X_LPARAM(lParam);
+        y = GET_Y_LPARAM(lParam);
+
+        LV_HITTESTINFO hittest = { { x, y } };
+        ScreenToClient(&hittest.pt);
+        m_ListView.HitTest(&hittest);
+
+        // Right-Clicked item is selected? If selected, no selection change.
+        // If not selected, then reset the selection and select the item.
+        if ((hittest.flags & LVHT_ONITEM) &&
+            m_ListView.GetItemState(hittest.iItem, LVIS_SELECTED) != LVIS_SELECTED)
+        {
+            SelectItem(hittest.iItem, SVSI_SELECT | SVSI_DESELECTOTHERS | SVSI_ENSUREVISIBLE);
+        }
+    }
+
     m_cidl = m_ListView.GetSelectedCount();
 
     hResult = GetItemObject( m_cidl ? SVGIO_SELECTION : SVGIO_BACKGROUND, IID_PPV_ARG(IContextMenu, &m_pCM));
@@ -1471,11 +1537,6 @@ LRESULT CDefView::OnContextMenu(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &b
         m_ListView.ClientToScreen(&pt);
         x = pt.x;
         y = pt.y;
-    }
-    else
-    {
-        x = GET_X_LPARAM(lParam);
-        y = GET_Y_LPARAM(lParam);
     }
 
     uCommand = TrackPopupMenu(m_hContextMenu,
@@ -1719,7 +1780,13 @@ LRESULT CDefView::OnCommand(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHand
             break;
 
         case FCIDM_SHVIEW_SNAPTOGRID:
-            //FIXME
+            m_ListView.Arrange(LVA_SNAPTOGRID);
+            break;
+        case FCIDM_SHVIEW_ALIGNTOGRID:
+            if (_GetSnapToGrid() == S_OK)
+                m_ListView.SetExtendedListViewStyle(0, LVS_EX_SNAPTOGRID);
+            else
+                ArrangeGrid();
             break;
         case FCIDM_SHVIEW_AUTOARRANGE:
             if (GetAutoArrange() == S_OK)
@@ -1746,6 +1813,8 @@ LRESULT CDefView::OnCommand(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHand
         case FCIDM_SHVIEW_COPY:
         case FCIDM_SHVIEW_RENAME:
         case FCIDM_SHVIEW_PROPERTIES:
+        case FCIDM_SHVIEW_COPYTO:
+        case FCIDM_SHVIEW_MOVETO:
             return OnExplorerCommand(dwCmdID, TRUE);
 
         case FCIDM_SHVIEW_INSERT:
@@ -1762,6 +1831,26 @@ LRESULT CDefView::OnCommand(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHand
     }
 
     return 0;
+}
+
+static BOOL
+SelectExtOnRename(void)
+{
+    HKEY hKey;
+    LONG error;
+    DWORD dwValue = FALSE, cbValue;
+
+    error = RegOpenKeyExW(HKEY_CURRENT_USER,
+                          L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer",
+                          0, KEY_READ, &hKey);
+    if (error)
+        return dwValue;
+
+    cbValue = sizeof(dwValue);
+    RegQueryValueExW(hKey, L"SelectExtOnRename", NULL, NULL, (LPBYTE)&dwValue, &cbValue);
+
+    RegCloseKey(hKey);
+    return !!dwValue;
 }
 
 /**********************************************************
@@ -1946,6 +2035,7 @@ LRESULT CDefView::OnNotify(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandl
                     m_pSourceDataObject = pda;
                     m_ptFirstMousePos = params->ptAction;
                     ClientToScreen(&m_ptFirstMousePos);
+                    ::ClientToListView(m_ListView, &m_ptFirstMousePos);
 
                     HIMAGELIST big_icons, small_icons;
                     Shell_GetImageLists(&big_icons, &small_icons);
@@ -1973,9 +2063,21 @@ LRESULT CDefView::OnNotify(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandl
             m_pSFParent->GetAttributesOf(1, &pidl, &dwAttr);
             if (SFGAO_CANRENAME & dwAttr)
             {
+                HWND hEdit = reinterpret_cast<HWND>(m_ListView.SendMessage(LVM_GETEDITCONTROL));
+                SHLimitInputEdit(hEdit, m_pSFParent);
+
+                if (!(dwAttr & SFGAO_LINK) && (lpdi->item.mask & LVIF_TEXT) && !SelectExtOnRename())
+                {
+                    LPWSTR pszText = lpdi->item.pszText;
+                    LPWSTR pchDotExt = PathFindExtensionW(pszText);
+                    ::PostMessageW(hEdit, EM_SETSEL, 0, pchDotExt - pszText);
+                    ::PostMessageW(hEdit, EM_SCROLLCARET, 0, 0);
+                }
+
                 m_isEditing = TRUE;
                 return FALSE;
             }
+
             return TRUE;
         }
 
@@ -2049,6 +2151,21 @@ static BOOL ILIsParentOrSpecialParent(PCIDLIST_ABSOLUTE pidl1, PCIDLIST_ABSOLUTE
         }
         ILFree(deskpidl);
     }
+
+    WCHAR szPath1[MAX_PATH], szPath2[MAX_PATH];
+    LPITEMIDLIST pidl2Clone = ILClone(pidl2);
+    ILRemoveLastID(pidl2Clone);
+    if (SHGetPathFromIDListW(pidl1, szPath1) &&
+        SHGetPathFromIDListW(pidl2Clone, szPath2))
+    {
+        if (lstrcmpiW(szPath1, szPath2) == 0)
+        {
+            ILFree(pidl2Clone);
+            return TRUE;
+        }
+    }
+    ILFree(pidl2Clone);
+
     return FALSE;
 }
 
@@ -2057,13 +2174,24 @@ static BOOL ILIsParentOrSpecialParent(PCIDLIST_ABSOLUTE pidl1, PCIDLIST_ABSOLUTE
 */
 LRESULT CDefView::OnChangeNotify(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
 {
-    PCIDLIST_ABSOLUTE *Pidls = reinterpret_cast<PCIDLIST_ABSOLUTE*>(wParam);
+    HANDLE hChange = (HANDLE)wParam;
+    DWORD dwProcID = (DWORD)lParam;
+    PIDLIST_ABSOLUTE *Pidls;
+    LONG lEvent;
+    HANDLE hLock = SHChangeNotification_Lock(hChange, dwProcID, &Pidls, &lEvent);
+    if (hLock == NULL)
+    {
+        ERR("hLock == NULL\n");
+        return FALSE;
+    }
+
     BOOL bParent0 = ILIsParentOrSpecialParent(m_pidlParent, Pidls[0]);
     BOOL bParent1 = ILIsParentOrSpecialParent(m_pidlParent, Pidls[1]);
 
     TRACE("(%p)(%p,%p,0x%08x)\n", this, Pidls[0], Pidls[1], lParam);
 
-    switch (lParam &~ SHCNE_INTERRUPT)
+    lEvent &= ~SHCNE_INTERRUPT;
+    switch (lEvent)
     {
         case SHCNE_MKDIR:
         case SHCNE_CREATE:
@@ -2105,6 +2233,8 @@ LRESULT CDefView::OnChangeNotify(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &
             Refresh();
             break;
     }
+
+    SHChangeNotification_Unlock(hLock);
     return TRUE;
 }
 
@@ -2158,6 +2288,26 @@ LRESULT CDefView::OnInitMenuPopup(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL 
     OnCustomItem(uMsg, wParam, lParam, bHandled);
 
     HMENU hViewMenu = GetSubmenuByID(m_hMenu, FCIDM_MENU_VIEW);
+
+    if (GetSelections() == 0)
+    {
+        ::EnableMenuItem(hmenu, FCIDM_SHVIEW_CUT, MF_GRAYED);
+        ::EnableMenuItem(hmenu, FCIDM_SHVIEW_COPY, MF_GRAYED);
+        ::EnableMenuItem(hmenu, FCIDM_SHVIEW_RENAME, MF_GRAYED);
+        ::EnableMenuItem(hmenu, FCIDM_SHVIEW_COPYTO, MF_GRAYED);
+        ::EnableMenuItem(hmenu, FCIDM_SHVIEW_MOVETO, MF_GRAYED);
+        ::EnableMenuItem(hmenu, FCIDM_SHVIEW_DELETE, MF_GRAYED);
+    }
+    else
+    {
+        // FIXME: Check copyable
+        ::EnableMenuItem(hmenu, FCIDM_SHVIEW_CUT, MF_ENABLED);
+        ::EnableMenuItem(hmenu, FCIDM_SHVIEW_COPY, MF_ENABLED);
+        ::EnableMenuItem(hmenu, FCIDM_SHVIEW_RENAME, MF_ENABLED);
+        ::EnableMenuItem(hmenu, FCIDM_SHVIEW_COPYTO, MF_ENABLED);
+        ::EnableMenuItem(hmenu, FCIDM_SHVIEW_MOVETO, MF_ENABLED);
+        ::EnableMenuItem(hmenu, FCIDM_SHVIEW_DELETE, MF_ENABLED);
+    }
 
     /* Lets try to find out what the hell wParam is */
     if (hmenu == GetSubMenu(m_hMenu, nPos))
@@ -2284,6 +2434,8 @@ HRESULT WINAPI CDefView::Refresh()
 {
     TRACE("(%p)\n", this);
 
+    _DoFolderViewCB(SFVM_LISTREFRESHED, TRUE, 0);
+
     m_ListView.DeleteAllItems();
     FillList();
 
@@ -2334,6 +2486,7 @@ HRESULT WINAPI CDefView::DestroyViewWindow()
 
     if (m_hWnd)
     {
+        _DoFolderViewCB(SFVM_WINDOWCLOSING, (WPARAM)m_hWnd, 0);
         DestroyWindow();
     }
 
@@ -2379,9 +2532,6 @@ HRESULT WINAPI CDefView::SelectItem(PCUITEMID_CHILD pidl, UINT uFlags)
     if (i == -1)
         return S_OK;
 
-    if(uFlags & SVSI_ENSUREVISIBLE)
-        m_ListView.EnsureVisible(i, FALSE);
-
     LVITEMW lvItem = {0};
     lvItem.mask = LVIF_STATE;
     lvItem.stateMask = LVIS_SELECTED | LVIS_FOCUSED;
@@ -2396,17 +2546,25 @@ HRESULT WINAPI CDefView::SelectItem(PCUITEMID_CHILD pidl, UINT uFlags)
                 lvItem.state &= ~LVIS_SELECTED;
 
             if (uFlags & SVSI_FOCUSED)
+                lvItem.state |= LVIS_FOCUSED;
+            else
                 lvItem.state &= ~LVIS_FOCUSED;
         }
         else
         {
             if (uFlags & SVSI_DESELECTOTHERS)
+            {
                 lvItem.state &= ~LVIS_SELECTED;
+            }
+            lvItem.state &= ~LVIS_FOCUSED;
         }
 
         m_ListView.SetItem(&lvItem);
         lvItem.iItem++;
     }
+
+    if (uFlags & SVSI_ENSUREVISIBLE)
+        m_ListView.EnsureVisible(i, FALSE);
 
     if((uFlags & SVSI_EDIT) == SVSI_EDIT)
         m_ListView.EditLabel(i);
@@ -2615,6 +2773,12 @@ HRESULT STDMETHODCALLTYPE CDefView::GetAutoArrange()
     return ((m_ListView.GetStyle() & LVS_AUTOARRANGE) ? S_OK : S_FALSE);
 }
 
+HRESULT CDefView::_GetSnapToGrid()
+{
+    DWORD dwExStyle = (DWORD)m_ListView.SendMessage(LVM_GETEXTENDEDLISTVIEWSTYLE, 0, 0);
+    return ((dwExStyle & LVS_EX_SNAPTOGRID) ? S_OK : S_FALSE);
+}
+
 HRESULT STDMETHODCALLTYPE CDefView::SelectItem(int iItem, DWORD dwFlags)
 {
     LVITEMW lvItem;
@@ -2745,7 +2909,7 @@ HRESULT STDMETHODCALLTYPE CDefView::CreateViewWindow3(IShellBrowser *psb, IShell
     if (!*hwnd)
         return E_FAIL;
 
-    _DoFolderViewCB(SFVM_WINDOWCREATED, (WPARAM)m_hWnd, NULL);
+    _DoFolderViewCB(SFVM_WINDOWCREATED, (WPARAM)m_hWnd, 0);
 
     SetWindowPos(HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
     UpdateWindow();
@@ -2791,8 +2955,8 @@ HRESULT STDMETHODCALLTYPE CDefView::GetArrangeParam(LPARAM *sort)
 
 HRESULT STDMETHODCALLTYPE CDefView::ArrangeGrid()
 {
-    FIXME("(%p) stub\n", this);
-    return E_NOTIMPL;
+    m_ListView.SetExtendedListViewStyle(LVS_EX_SNAPTOGRID, LVS_EX_SNAPTOGRID);
+    return S_OK;
 }
 
 HRESULT STDMETHODCALLTYPE CDefView::AutoArrange()
@@ -3116,6 +3280,7 @@ HRESULT CDefView::drag_notify_subitem(DWORD grfKeyState, POINTL pt, DWORD *pdwEf
     }
 
     m_ptLastMousePos = htinfo.pt;
+    ::ClientToListView(m_ListView, &m_ptLastMousePos);
 
     /* We need to check if we drag the selection over itself */
     if (lResult != -1 && m_pSourceDataObject.p != NULL)
@@ -3186,6 +3351,9 @@ HRESULT CDefView::drag_notify_subitem(DWORD grfKeyState, POINTL pt, DWORD *pdwEf
 
 HRESULT WINAPI CDefView::DragEnter(IDataObject *pDataObject, DWORD grfKeyState, POINTL pt, DWORD *pdwEffect)
 {
+    if (*pdwEffect == DROPEFFECT_NONE)
+        return S_OK;
+
     /* Get a hold on the data object for later calls to DragEnter on the sub-folders */
     m_pCurDataObject = pDataObject;
 
@@ -3228,6 +3396,150 @@ HRESULT WINAPI CDefView::DragLeave()
     return S_OK;
 }
 
+INT CDefView::_FindInsertableIndexFromPoint(POINT pt)
+{
+    RECT rcBound;
+    INT i, nCount = m_ListView.GetItemCount();
+    DWORD dwSpacing;
+    INT dx, dy;
+    BOOL bSmall = ((m_ListView.GetStyle() & LVS_TYPEMASK) != LVS_ICON);
+
+    /* FIXME: LVM_GETORIGIN is broken. See CORE-17266 */
+    pt.x += m_ListView.GetScrollPos(SB_HORZ);
+    pt.y += m_ListView.GetScrollPos(SB_VERT);
+
+    if (m_ListView.GetStyle() & LVS_ALIGNLEFT)
+    {
+        // vertically
+        for (i = 0; i < nCount; ++i)
+        {
+            dwSpacing = ListView_GetItemSpacing(m_ListView, bSmall);
+            dx = LOWORD(dwSpacing);
+            dy = HIWORD(dwSpacing);
+            ListView_GetItemRect(m_ListView, i, &rcBound, LVIR_SELECTBOUNDS);
+            rcBound.right = rcBound.left + dx;
+            rcBound.bottom = rcBound.top + dy;
+            if (pt.x < rcBound.right && pt.y < (rcBound.top + rcBound.bottom) / 2)
+            {
+                return i;
+            }
+        }
+        for (i = nCount - 1; i >= 0; --i)
+        {
+            ListView_GetItemRect(m_ListView, i, &rcBound, LVIR_SELECTBOUNDS);
+            if (rcBound.left < pt.x && rcBound.top < pt.y)
+            {
+                return i + 1;
+            }
+        }
+    }
+    else
+    {
+        // horizontally
+        for (i = 0; i < nCount; ++i)
+        {
+            dwSpacing = ListView_GetItemSpacing(m_ListView, bSmall);
+            dx = LOWORD(dwSpacing);
+            dy = HIWORD(dwSpacing);
+            ListView_GetItemRect(m_ListView, i, &rcBound, LVIR_SELECTBOUNDS);
+            rcBound.right = rcBound.left + dx;
+            rcBound.bottom = rcBound.top + dy;
+            if (pt.y < rcBound.bottom && pt.x < rcBound.left)
+            {
+                return i;
+            }
+            if (pt.y < rcBound.bottom && pt.x < rcBound.right)
+            {
+                return i + 1;
+            }
+        }
+        for (i = nCount - 1; i >= 0; --i)
+        {
+            ListView_GetItemRect(m_ListView, i, &rcBound, LVIR_SELECTBOUNDS);
+            if (rcBound.left < pt.x && rcBound.top < pt.y)
+            {
+                return i + 1;
+            }
+        }
+    }
+
+    return nCount;
+}
+
+typedef CSimpleMap<LPARAM, INT> CLParamIndexMap;
+
+static INT CALLBACK
+SelectionMoveCompareFunc(LPARAM lParam1, LPARAM lParam2, LPARAM lParamSort)
+{
+    CLParamIndexMap *pmap = (CLParamIndexMap *)lParamSort;
+    INT i1 = pmap->Lookup(lParam1), i2 = pmap->Lookup(lParam2);
+    if (i1 < i2)
+        return -1;
+    if (i1 > i2)
+        return 1;
+    return 0;
+}
+
+void CDefView::_MoveSelectionOnAutoArrange(POINT pt)
+{
+    // get insertable index from position
+    INT iPosition = _FindInsertableIndexFromPoint(pt);
+
+    // create identity mapping of indexes
+    CSimpleArray<INT> array;
+    INT nCount = m_ListView.GetItemCount();
+    for (INT i = 0; i < nCount; ++i)
+    {
+        array.Add(i);
+    }
+
+    // re-ordering mapping
+    INT iItem = -1;
+    while ((iItem = m_ListView.GetNextItem(iItem, LVNI_SELECTED)) >= 0)
+    {
+        INT iFrom = iItem, iTo = iPosition;
+        if (iFrom < iTo)
+            --iTo;
+        if (iFrom >= nCount)
+            iFrom = nCount - 1;
+        if (iTo >= nCount)
+            iTo = nCount - 1;
+
+        // shift indexes by swapping (like a bucket relay)
+        if (iFrom < iTo)
+        {
+            for (INT i = iFrom; i < iTo; ++i)
+            {
+                // swap array[i] and array[i + 1]
+                INT tmp = array[i];
+                array[i] = array[i + 1];
+                array[i + 1] = tmp;
+            }
+        }
+        else
+        {
+            for (INT i = iFrom; i > iTo; --i)
+            {
+                // swap array[i] and array[i - 1]
+                INT tmp = array[i];
+                array[i] = array[i - 1];
+                array[i - 1] = tmp;
+            }
+        }
+    }
+
+    // create mapping (ListView's lParam to index) from array
+    CLParamIndexMap map;
+    for (INT i = 0; i < nCount; ++i)
+    {
+        LPARAM lParam = m_ListView.GetItemData(array[i]);
+        map.Add(lParam, i);
+    }
+
+    // finally sort
+    m_ListView.SortItems(SelectionMoveCompareFunc, &map);
+}
+
 HRESULT WINAPI CDefView::Drop(IDataObject* pDataObject, DWORD grfKeyState, POINTL pt, DWORD *pdwEffect)
 {
     ImageList_DragLeave(m_hWnd);
@@ -3243,23 +3555,31 @@ HRESULT WINAPI CDefView::Drop(IDataObject* pDataObject, DWORD grfKeyState, POINT
             m_pCurDropTarget.Release();
         }
 
-        /* Restore the selection */
-        m_ListView.SetItemState(-1, 0, LVIS_SELECTED);
-        for (UINT i = 0 ; i < m_cidl; i++)
-            SelectItem(m_apidl[i], SVSI_SELECT);
+        POINT ptDrop = { pt.x, pt.y };
+        ::ScreenToClient(m_ListView, &ptDrop);
+        ::ClientToListView(m_ListView, &ptDrop);
+        m_ptLastMousePos = ptDrop;
 
-        /* Reposition the items */
-        int lvIndex = -1;
-        while ((lvIndex = m_ListView.GetNextItem(lvIndex,  LVNI_SELECTED)) > -1)
+        m_ListView.SetRedraw(FALSE);
+        if (m_ListView.GetStyle() & LVS_AUTOARRANGE)
+        {
+            _MoveSelectionOnAutoArrange(m_ptLastMousePos);
+        }
+        else
         {
             POINT ptItem;
-            if (m_ListView.GetItemPosition(lvIndex, &ptItem))
+            INT iItem = -1;
+            while ((iItem = m_ListView.GetNextItem(iItem, LVNI_SELECTED)) >= 0)
             {
-                ptItem.x += pt.x - m_ptFirstMousePos.x;
-                ptItem.y += pt.y - m_ptFirstMousePos.y;
-                m_ListView.SetItemPosition(lvIndex, &ptItem);
+                if (m_ListView.GetItemPosition(iItem, &ptItem))
+                {
+                    ptItem.x += m_ptLastMousePos.x - m_ptFirstMousePos.x;
+                    ptItem.y += m_ptLastMousePos.y - m_ptFirstMousePos.y;
+                    m_ListView.SetItemPosition(iItem, &ptItem);
+                }
             }
         }
+        m_ListView.SetRedraw(TRUE);
     }
     else if (m_pCurDropTarget)
     {
@@ -3395,14 +3715,6 @@ HRESULT CDefView::_MergeToolbar()
     return S_OK;
 }
 
-// The default processing of IShellFolderView callbacks
-HRESULT CDefView::DefMessageSFVCB(UINT uMsg, WPARAM wParam, LPARAM lParam)
-{
-    // TODO: SFVM_GET_CUSTOMVIEWINFO, SFVM_WINDOWCREATED
-    TRACE("CDefView::DefMessageSFVCB uMsg=%u\n", uMsg);
-    return E_NOTIMPL;
-}
-
 HRESULT CDefView::_DoFolderViewCB(UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
     HRESULT hr = E_NOTIMPL;
@@ -3410,11 +3722,6 @@ HRESULT CDefView::_DoFolderViewCB(UINT uMsg, WPARAM wParam, LPARAM lParam)
     if (m_pShellFolderViewCB)
     {
         hr = m_pShellFolderViewCB->MessageSFVCB(uMsg, wParam, lParam);
-    }
-
-    if (hr == E_NOTIMPL)
-    {
-        hr = DefMessageSFVCB(uMsg, wParam, lParam);
     }
 
     return hr;

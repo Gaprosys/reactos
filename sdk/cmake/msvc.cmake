@@ -50,19 +50,29 @@ endif()
 
 # HACK: for VS 11+ we need to explicitly disable SSE, which is off by
 # default for older compilers. See CORE-6507
-if(MSVC_VERSION GREATER 1699 AND ARCH STREQUAL "i386")
-    add_compile_flags("/arch:IA32")
-endif ()
+if(ARCH STREQUAL "i386")
+    # Clang's IA32 means i386, which doesn't have cmpxchg8b
+    if(USE_CLANG_CL)
+        add_compile_flags("-march=${OARCH}")
+    else()
+        add_compile_flags("/arch:IA32")
+    endif()
+endif()
 
 # VS 12+ requires /FS when used in parallel compilations
-if(MSVC_VERSION GREATER 1799 AND NOT MSVC_IDE)
+if(NOT MSVC_IDE)
     add_compile_flags("/FS")
-endif ()
+endif()
 
 # VS14+ tries to use thread-safe initialization
-if(MSVC_VERSION GREATER 1899)
-    add_compile_flags("/Zc:threadSafeInit-")
-endif ()
+add_compile_flags("/Zc:threadSafeInit-")
+
+# HACK: Disable use of __CxxFrameHandler4 on VS 16.3+ (x64 only)
+# See https://developercommunity.visualstudio.com/content/problem/746534/visual-c-163-runtime-uses-an-unsupported-api-for-u.html
+if(ARCH STREQUAL "amd64" AND MSVC_VERSION GREATER 1922)
+    add_compile_flags("/d2FH4-")
+    add_link_options("/d2:-FH4-")
+endif()
 
 # Generate Warnings Level 3
 add_compile_flags("/W3")
@@ -88,6 +98,7 @@ add_compile_flags("/wd4018")
 # - TODO: C4090: different 'modifier' qualifiers (for C programs only;
 #          for C++ programs, the compiler error C2440 is issued)
 # - C4098: void function returning a value
+# - C4101: unreferenced local variable
 # - C4113: parameter lists differ
 # - C4129: unrecognized escape sequence
 # - C4133: incompatible types - from '<x> *' to '<y> *'
@@ -95,15 +106,17 @@ add_compile_flags("/wd4018")
 # - C4229: modifiers on data are ignored
 # - C4311: pointer truncation from '<pointer>' to '<integer>'
 # - C4312: conversion from '<integer>' to '<pointer>' of greater size
+# - C4313: 'fprintf': '%x' in format string conflicts with argument n of type 'HANDLE'
+# - C4477: '_snprintf' : format string '%ld' requires an argument of type 'long', but variadic argument 1 has type 'DWORD_PTR'
 # - C4603: macro is not defined or definition is different after precompiled header use
 # - C4700: uninitialized variable usage
 # - C4715: 'function': not all control paths return a value
 # - C4716: function must return a value
-add_compile_flags("/we4013 /we4020 /we4022 /we4028 /we4047 /we4098 /we4113 /we4129 /we4133 /we4163 /we4229 /we4311 /we4312 /we4603 /we4700 /we4715 /we4716")
+add_compile_flags("/we4013 /we4020 /we4022 /we4028 /we4047 /we4098 /we4101 /we4113 /we4129 /we4133 /we4163 /we4229 /we4311 /we4312 /we4313 /we4477 /we4603 /we4700 /we4715 /we4716")
 
 # - C4189: local variable initialized but not referenced
-# Not in Release mode and not with MSVC 2010
-if((NOT CMAKE_BUILD_TYPE STREQUAL "Release") AND (NOT MSVC_VERSION LESS 1700))
+# Not in Release mode
+if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
     add_compile_flags("/we4189")
 endif()
 
@@ -141,10 +154,6 @@ if(MSVC_IDE AND (NOT DEFINED USE_FOLDER_STRUCTURE))
     set(USE_FOLDER_STRUCTURE TRUE)
 endif()
 
-if(NOT DEFINED RUNTIME_CHECKS)
-    set(RUNTIME_CHECKS FALSE)
-endif()
-
 if(RUNTIME_CHECKS)
     add_definitions(-D__RUNTIME_CHECKS__)
     add_compile_flags("/RTC1")
@@ -153,6 +162,7 @@ endif()
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /MANIFEST:NO /INCREMENTAL:NO /SAFESEH:NO /NODEFAULTLIB /RELEASE ${_hotpatch_link_flag} /IGNORE:4039")
 set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /MANIFEST:NO /INCREMENTAL:NO /SAFESEH:NO /NODEFAULTLIB /RELEASE ${_hotpatch_link_flag} /IGNORE:4104 /IGNORE:4039")
 set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS} /MANIFEST:NO /INCREMENTAL:NO /SAFESEH:NO /NODEFAULTLIB /RELEASE ${_hotpatch_link_flag} /IGNORE:4039")
+set(CMAKE_MSVC_RUNTIME_LIBRARY "")
 
 # HACK: Remove the /implib argument, implibs are generated separately
 string(REPLACE "/implib:<TARGET_IMPLIB>" "" CMAKE_C_LINK_EXECUTABLE "${CMAKE_C_LINK_EXECUTABLE}")
@@ -162,38 +172,32 @@ string(REPLACE "/implib:<TARGET_IMPLIB>" "" CMAKE_CXX_CREATE_SHARED_LIBRARY "${C
 string(REPLACE "/implib:<TARGET_IMPLIB>" "" CMAKE_C_CREATE_SHARED_MODULE "${CMAKE_C_CREATE_SHARED_MODULE}")
 string(REPLACE "/implib:<TARGET_IMPLIB>" "" CMAKE_CXX_CREATE_SHARED_MODULE "${CMAKE_CXX_CREATE_SHARED_MODULE}")
 
+# HACK2: CMake lacks the ability to completely remove the 'implib' argument for solution files...
+# To work around this, we just let it create a dummy file
+if(MSVC_IDE)
+    set(CMAKE_IMPORT_LIBRARY_SUFFIX ".dummy")
+endif()
+
+
 if(CMAKE_DISABLE_NINJA_DEPSLOG)
     set(cl_includes_flag "")
 else()
     set(cl_includes_flag "/showIncludes")
 endif()
 
-if(MSVC_IDE AND (CMAKE_VERSION MATCHES "ReactOS"))
+if(MSVC_IDE)
     # For VS builds we'll only have en-US in resource files
     add_definitions(/DLANGUAGE_EN_US)
 else()
-    if(CMAKE_VERSION VERSION_LESS 3.4.0)
-        set(CMAKE_RC_COMPILE_OBJECT "<CMAKE_RC_COMPILER> /nologo <FLAGS> <DEFINES> ${I18N_DEFS} /fo<OBJECT> <SOURCE>")
-        if(ARCH STREQUAL "arm")
-            set(CMAKE_ASM_COMPILE_OBJECT
-                "cl ${cl_includes_flag} /nologo /X /I${REACTOS_SOURCE_DIR}/sdk/include/asm /I${REACTOS_BINARY_DIR}/sdk/include/asm <FLAGS> <DEFINES> /D__ASM__ /D_USE_ML /EP /c <SOURCE> > <OBJECT>.tmp"
-                "<CMAKE_ASM_COMPILER> -nologo -o <OBJECT> <OBJECT>.tmp")
-        else()
-            set(CMAKE_ASM_COMPILE_OBJECT
-                "cl ${cl_includes_flag} /nologo /X /I${REACTOS_SOURCE_DIR}/sdk/include/asm /I${REACTOS_BINARY_DIR}/sdk/include/asm <FLAGS> <DEFINES> /D__ASM__ /D_USE_ML /EP /c <SOURCE> > <OBJECT>.tmp"
-                "<CMAKE_ASM_COMPILER> /nologo /Cp /Fo<OBJECT> /c /Ta <OBJECT>.tmp")
-        endif()
+    set(CMAKE_RC_COMPILE_OBJECT "<CMAKE_RC_COMPILER> /nologo <INCLUDES> <FLAGS> <DEFINES> ${I18N_DEFS} /fo <OBJECT> <SOURCE>")
+    if(ARCH STREQUAL "arm")
+        set(CMAKE_ASM_COMPILE_OBJECT
+            "cl ${cl_includes_flag} /nologo /X /I${REACTOS_SOURCE_DIR}/sdk/include/asm /I${REACTOS_BINARY_DIR}/sdk/include/asm <INCLUDES> <FLAGS> <DEFINES> /D__ASM__ /D_USE_ML /EP /c <SOURCE> > <OBJECT>.tmp"
+            "<CMAKE_ASM_COMPILER> -nologo -o <OBJECT> <OBJECT>.tmp")
     else()
-        set(CMAKE_RC_COMPILE_OBJECT "<CMAKE_RC_COMPILER> /nologo <INCLUDES> <FLAGS> <DEFINES> ${I18N_DEFS} /fo<OBJECT> <SOURCE>")
-        if(ARCH STREQUAL "arm")
-            set(CMAKE_ASM_COMPILE_OBJECT
-                "cl ${cl_includes_flag} /nologo /X /I${REACTOS_SOURCE_DIR}/sdk/include/asm /I${REACTOS_BINARY_DIR}/sdk/include/asm <INCLUDES> <FLAGS> <DEFINES> /D__ASM__ /D_USE_ML /EP /c <SOURCE> > <OBJECT>.tmp"
-                "<CMAKE_ASM_COMPILER> -nologo -o <OBJECT> <OBJECT>.tmp")
-        else()
-            set(CMAKE_ASM_COMPILE_OBJECT
-                "cl ${cl_includes_flag} /nologo /X /I${REACTOS_SOURCE_DIR}/sdk/include/asm /I${REACTOS_BINARY_DIR}/sdk/include/asm <INCLUDES> <FLAGS> <DEFINES> /D__ASM__ /D_USE_ML /EP /c <SOURCE> > <OBJECT>.tmp"
-                "<CMAKE_ASM_COMPILER> /nologo /Cp /Fo<OBJECT> /c /Ta <OBJECT>.tmp")
-        endif()
+        set(CMAKE_ASM_COMPILE_OBJECT
+            "cl ${cl_includes_flag} /nologo /X /I${REACTOS_SOURCE_DIR}/sdk/include/asm /I${REACTOS_BINARY_DIR}/sdk/include/asm <INCLUDES> <FLAGS> <DEFINES> /D__ASM__ /D_USE_ML /EP /c <SOURCE> > <OBJECT>.tmp"
+            "<CMAKE_ASM_COMPILER> /nologo /Cp /Fo<OBJECT> /c /Ta <OBJECT>.tmp")
     endif()
 endif()
 
@@ -202,25 +206,14 @@ if(_VS_ANALYZE_)
     add_compile_flags("/analyze")
 elseif(_PREFAST_)
     message("PREFAST enabled!")
-    if(CMAKE_VERSION VERSION_LESS 3.4.0)
-        set(CMAKE_C_COMPILE_OBJECT "prefast <CMAKE_C_COMPILER> ${CMAKE_START_TEMP_FILE} ${CMAKE_CL_NOLOGO} <FLAGS> <DEFINES> /Fo<OBJECT> -c <SOURCE>${CMAKE_END_TEMP_FILE}"
-        "prefast LIST")
-        set(CMAKE_CXX_COMPILE_OBJECT "prefast <CMAKE_CXX_COMPILER> ${CMAKE_START_TEMP_FILE} ${CMAKE_CL_NOLOGO} <FLAGS> <DEFINES> /TP /Fo<OBJECT> -c <SOURCE>${CMAKE_END_TEMP_FILE}"
-        "prefast LIST")
-        set(CMAKE_C_LINK_EXECUTABLE
-        "<CMAKE_C_COMPILER> ${CMAKE_CL_NOLOGO} <OBJECTS> ${CMAKE_START_TEMP_FILE} <FLAGS> /Fe<TARGET> -link /implib:<TARGET_IMPLIB> /version:<TARGET_VERSION_MAJOR>.<TARGET_VERSION_MINOR> <CMAKE_C_LINK_FLAGS> <LINK_FLAGS> <LINK_LIBRARIES>${CMAKE_END_TEMP_FILE}")
-        set(CMAKE_CXX_LINK_EXECUTABLE
-        "<CMAKE_CXX_COMPILER> ${CMAKE_CL_NOLOGO} <OBJECTS> ${CMAKE_START_TEMP_FILE} <FLAGS> /Fe<TARGET> -link /implib:<TARGET_IMPLIB> /version:<TARGET_VERSION_MAJOR>.<TARGET_VERSION_MINOR> <CMAKE_CXX_LINK_FLAGS> <LINK_FLAGS> <LINK_LIBRARIES>${CMAKE_END_TEMP_FILE}")
-    else()
-        set(CMAKE_C_COMPILE_OBJECT "prefast <CMAKE_C_COMPILER> ${CMAKE_START_TEMP_FILE} ${CMAKE_CL_NOLOGO} <INCLUDES> <FLAGS> <DEFINES> /Fo<OBJECT> -c <SOURCE>${CMAKE_END_TEMP_FILE}"
-        "prefast LIST")
-        set(CMAKE_CXX_COMPILE_OBJECT "prefast <CMAKE_CXX_COMPILER> ${CMAKE_START_TEMP_FILE} ${CMAKE_CL_NOLOGO} <INCLUDES> <FLAGS> <DEFINES> /TP /Fo<OBJECT> -c <SOURCE>${CMAKE_END_TEMP_FILE}"
-        "prefast LIST")
-        set(CMAKE_C_LINK_EXECUTABLE
-        "<CMAKE_C_COMPILER> ${CMAKE_CL_NOLOGO} <OBJECTS> ${CMAKE_START_TEMP_FILE} <INCLUDES> <FLAGS> /Fe<TARGET> -link /implib:<TARGET_IMPLIB> /version:<TARGET_VERSION_MAJOR>.<TARGET_VERSION_MINOR> <CMAKE_C_LINK_FLAGS> <LINK_FLAGS> <LINK_LIBRARIES>${CMAKE_END_TEMP_FILE}")
-        set(CMAKE_CXX_LINK_EXECUTABLE
-        "<CMAKE_CXX_COMPILER> ${CMAKE_CL_NOLOGO} <OBJECTS> ${CMAKE_START_TEMP_FILE} <INCLUDES> <FLAGS> /Fe<TARGET> -link /implib:<TARGET_IMPLIB> /version:<TARGET_VERSION_MAJOR>.<TARGET_VERSION_MINOR> <CMAKE_CXX_LINK_FLAGS> <LINK_FLAGS> <LINK_LIBRARIES>${CMAKE_END_TEMP_FILE}")
-    endif()
+    set(CMAKE_C_COMPILE_OBJECT "prefast <CMAKE_C_COMPILER> ${CMAKE_START_TEMP_FILE} ${CMAKE_CL_NOLOGO} <INCLUDES> <FLAGS> <DEFINES> /Fo<OBJECT> -c <SOURCE>${CMAKE_END_TEMP_FILE}"
+    "prefast LIST")
+    set(CMAKE_CXX_COMPILE_OBJECT "prefast <CMAKE_CXX_COMPILER> ${CMAKE_START_TEMP_FILE} ${CMAKE_CL_NOLOGO} <INCLUDES> <FLAGS> <DEFINES> /TP /Fo<OBJECT> -c <SOURCE>${CMAKE_END_TEMP_FILE}"
+    "prefast LIST")
+    set(CMAKE_C_LINK_EXECUTABLE
+    "<CMAKE_C_COMPILER> ${CMAKE_CL_NOLOGO} <OBJECTS> ${CMAKE_START_TEMP_FILE} <INCLUDES> <FLAGS> /Fe<TARGET> -link /implib:<TARGET_IMPLIB> /version:<TARGET_VERSION_MAJOR>.<TARGET_VERSION_MINOR> <CMAKE_C_LINK_FLAGS> <LINK_FLAGS> <LINK_LIBRARIES>${CMAKE_END_TEMP_FILE}")
+    set(CMAKE_CXX_LINK_EXECUTABLE
+    "<CMAKE_CXX_COMPILER> ${CMAKE_CL_NOLOGO} <OBJECTS> ${CMAKE_START_TEMP_FILE} <INCLUDES> <FLAGS> /Fe<TARGET> -link /implib:<TARGET_IMPLIB> /version:<TARGET_VERSION_MAJOR>.<TARGET_VERSION_MINOR> <CMAKE_CXX_LINK_FLAGS> <LINK_FLAGS> <LINK_LIBRARIES>${CMAKE_END_TEMP_FILE}")
 endif()
 
 set(CMAKE_RC_CREATE_SHARED_LIBRARY ${CMAKE_C_CREATE_SHARED_LIBRARY})
@@ -228,63 +221,6 @@ set(CMAKE_ASM_CREATE_SHARED_LIBRARY ${CMAKE_C_CREATE_SHARED_LIBRARY})
 set(CMAKE_RC_CREATE_SHARED_MODULE ${CMAKE_C_CREATE_SHARED_MODULE})
 set(CMAKE_ASM_CREATE_SHARED_MODULE ${CMAKE_C_CREATE_SHARED_MODULE})
 set(CMAKE_ASM_CREATE_STATIC_LIBRARY ${CMAKE_C_CREATE_STATIC_LIBRARY})
-
-if(PCH)
-    macro(add_pch _target _pch _sources)
-
-        # Workaround for the MSVC toolchain (MSBUILD) /MP bug
-        set(_temp_gch ${CMAKE_CURRENT_BINARY_DIR}/${_target}.pch)
-        if(MSVC_IDE)
-            file(TO_NATIVE_PATH ${_temp_gch} _gch)
-        else()
-            set(_gch ${_temp_gch})
-        endif()
-
-        if(IS_CPP)
-            set(_pch_language CXX)
-            if(NOT USE_CLANG_CL)
-                set(_cl_lang_flag "/TP")
-            endif()
-        else()
-            set(_pch_language C)
-            set(_cl_lang_flag "/TC")
-        endif()
-
-        if(MSVC_IDE)
-            set(_pch_path_name_flag "/Fp${_gch}")
-        endif()
-
-        if(USE_CLANG_CL)
-            set(_pch_compile_flags "${_cl_lang_flag} /Yc${_pch} /FI${_pch} /Fp${_gch}")
-        else()
-            set(_pch_compile_flags "${_cl_lang_flag} /Yc /Fp${_gch}")
-        endif()
-
-        # Build the precompiled header
-        # HEADER_FILE_ONLY FALSE: force compiling the header
-        set_source_files_properties(${_pch} PROPERTIES
-            HEADER_FILE_ONLY FALSE
-            LANGUAGE ${_pch_language}
-            COMPILE_FLAGS ${_pch_compile_flags}
-            OBJECT_OUTPUTS ${_gch})
-
-        # Prevent a race condition related to writing to the PDB files between the PCH and the excluded list of source files
-        get_target_property(_target_sources ${_target} SOURCES)
-        list(REMOVE_ITEM _target_sources ${_pch})
-        foreach(_target_src ${_target_sources})
-            set_property(SOURCE ${_target_src} APPEND PROPERTY OBJECT_DEPENDS ${_gch})
-        endforeach()
-
-        # Use the precompiled header with the specified source files, skipping the pch itself
-        list(REMOVE_ITEM ${_sources} ${_pch})
-        foreach(_src ${${_sources}})
-            set_property(SOURCE ${_src} APPEND_STRING PROPERTY COMPILE_FLAGS " /FI${_gch} /Yu${_gch} ${_pch_path_name_flag}")
-        endforeach()
-    endmacro()
-else()
-    macro(add_pch _target _pch _sources)
-    endmacro()
-endif()
 
 function(set_entrypoint _module _entrypoint)
     if(${_entrypoint} STREQUAL "0")
@@ -365,6 +301,10 @@ function(add_delay_importlibs _module)
     target_link_libraries(${_module} delayimp)
 endfunction()
 
+function(fixup_load_config _target)
+    # msvc knows how to generate a load_config so no hacks here
+endfunction()
+
 function(generate_import_lib _libname _dllname _spec_file)
 
     set(_def_file ${CMAKE_CURRENT_BINARY_DIR}/${_libname}_exp.def)
@@ -430,7 +370,7 @@ function(spec2def _dllname _spec_file)
         message(FATAL_ERROR "spec2def only takes spec files as input.")
     endif()
 
-    if (__spec2def_WITH_RELAY)
+    if(__spec2def_WITH_RELAY)
         set(__with_relay_arg "--with-tracing")
     endif()
 
@@ -476,6 +416,9 @@ function(CreateBootSectorTarget _target_name _asm_file _binary_file _base_addres
     set(_object_file ${_binary_file}.obj)
     set(_temp_file ${_binary_file}.tmp)
 
+    get_defines(_defines)
+    get_includes(_includes)
+
     if(USE_CLANG_CL)
         set(_no_std_includes_flag "-nostdinc")
     else()
@@ -484,7 +427,7 @@ function(CreateBootSectorTarget _target_name _asm_file _binary_file _base_addres
 
     add_custom_command(
         OUTPUT ${_temp_file}
-        COMMAND ${CMAKE_C_COMPILER} /nologo ${_no_std_includes_flag} /I${REACTOS_SOURCE_DIR}/sdk/include/asm /I${REACTOS_BINARY_DIR}/sdk/include/asm /I${REACTOS_SOURCE_DIR}/boot/freeldr /D__ASM__ /D_USE_ML /EP /c ${_asm_file} > ${_temp_file}
+        COMMAND ${CMAKE_C_COMPILER} /nologo ${_no_std_includes_flag} /I${REACTOS_SOURCE_DIR}/sdk/include/asm /I${REACTOS_BINARY_DIR}/sdk/include/asm ${_includes} ${_defines} /D__ASM__ /D_USE_ML /EP /c ${_asm_file} > ${_temp_file}
         DEPENDS ${_asm_file})
 
     if(ARCH STREQUAL "arm")
@@ -512,7 +455,7 @@ function(allow_warnings __module)
 endfunction()
 
 macro(add_asm_files _target)
-    if(MSVC_IDE AND (CMAKE_VERSION MATCHES "ReactOS"))
+    if(MSVC_IDE)
         get_defines(_directory_defines)
         get_includes(_directory_includes)
         get_directory_property(_defines COMPILE_DEFINITIONS)
@@ -579,7 +522,7 @@ function(add_linker_script _target _linker_script_file)
     else()
         set(_no_std_includes_flag "/X")
     endif()
-    if(MSVC_IDE AND (CMAKE_VERSION MATCHES "ReactOS"))
+    if(MSVC_IDE)
         # MSBuild, via the VS IDE, uses response files when calling CL or LINK.
         # We cannot specify a custom response file on the linker command-line,
         # since specifying response files from within response files is forbidden.

@@ -1,6 +1,7 @@
 
 add_definitions(
     -D__WINESRC__
+    -D__ROS_LONG64__
     -D_USE_MATH_DEFINES)
 
 include_directories(${REACTOS_SOURCE_DIR}/sdk/include/reactos/wine)
@@ -31,8 +32,11 @@ list(APPEND SOURCE
     object.c
     regexp.c
     string.c
-    vbarray.c
-    precomp.h)
+    vbarray.c)
+
+list(APPEND PCH_SKIP_SOURCE
+    cc_parser.tab.c
+    parser.tab.c)
 
 # cc_parser.tab.c/parser.tab.c have been generated with relative file paths...
 set_source_files_properties(cc_parser.tab.c parser.tab.c PROPERTIES COMPILE_FLAGS "-UREACTOS_SOURCE_DIR -DREACTOS_SOURCE_DIR=\"\\\".\\\"\"")
@@ -47,8 +51,7 @@ set_source_files_properties(rsrc.rc PROPERTIES OBJECT_DEPENDS "${jscript_rc_deps
 
 add_library(jscript MODULE
     ${SOURCE}
-    cc_parser.tab.c
-    parser.tab.c
+    ${PCH_SKIP_SOURCE}
     rsrc.rc
     ${CMAKE_CURRENT_BINARY_DIR}/jscript.def)
 
@@ -58,5 +61,5 @@ add_dependencies(jscript jscript_idlheader stdole2)
 set_module_type(jscript win32dll)
 target_link_libraries(jscript uuid wine)
 add_importlibs(jscript user32 ole32 oleaut32 advapi32 msvcrt kernel32 ntdll)
-add_pch(jscript precomp.h SOURCE)
+add_pch(jscript precomp.h "${PCH_SKIP_SOURCE}")
 add_cd_file(TARGET jscript DESTINATION reactos/system32 FOR all)

@@ -51,10 +51,13 @@
 /* CSRSS Header */
 #include <csr/csr.h>
 #include <win/winmsg.h>
+#include <psdk/dbt.h>
 
 /* WINE Headers */
 #include <wine/unicode.h>
 #include <wine/debug.h>
+
+#include <winnls32.h>
 
 /* Internal User32 Headers */
 #include "user32p.h"

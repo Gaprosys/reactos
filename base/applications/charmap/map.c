@@ -10,6 +10,7 @@
 #include "precomp.h"
 
 #include <stdlib.h>
+#include <winnls.h>
 
 static const WCHAR szMapWndClass[] = L"FontMapWnd";
 static const WCHAR szLrgCellWndClass[] = L"LrgCellWnd";
@@ -39,6 +40,7 @@ SetGrid(PMAP infoPtr)
                     -1);
     }
 }
+
 
 static
 VOID
@@ -111,6 +113,8 @@ FillGrid(PMAP infoPtr,
     for (y = 0; y < YCELLS; y++)
     for (x = 0; x < XCELLS; x++)
     {
+        if (i >= infoPtr->NumValidGlyphs) break;
+
         ch = (WCHAR)infoPtr->ValidGlyphs[i];
 
         Cell = &infoPtr->Cells[y][x];
@@ -208,6 +212,38 @@ MoveLargeCell(PMAP infoPtr)
 
 static
 VOID
+GetPossibleCharacters(WCHAR* ch, INT chLen, INT codePageIdx)
+{
+    INT i, j;
+
+    memset(ch, 0, sizeof(ch[0]) * chLen);
+
+    if (codePageIdx <= 0 || codePageIdx > SIZEOF(codePages))
+    {
+        /* this is unicode, so just load up the first MAX_GLYPHS characters
+           start at 0x21 to bypass whitespace characters */
+        INT len = min(MAX_GLYPHS, chLen);
+        for (i = 0x21, j = 0; i < len; i++)
+            ch[j++] = (WCHAR)i;
+    }
+    else
+    {
+        /* This is a codepage, so use NLS to translate the first 256 characters */
+        CHAR multiByteString[256] = { 0 };
+        for (i = 0x21; i < SIZEOF(multiByteString); i++)
+            multiByteString[i] = (CHAR)i;
+
+        if (!MultiByteToWideChar(codePages[codePageIdx - 1], 0, multiByteString, sizeof(multiByteString), ch, chLen))
+        {
+            /* Failed for some reason, so clear the array */
+            memset(ch, 0, sizeof(ch[0]) * chLen);
+        }
+    }
+}
+
+
+static
+VOID
 SetFont(PMAP infoPtr,
         LPWSTR lpFontName)
 {
@@ -230,9 +266,9 @@ SetFont(PMAP infoPtr,
     infoPtr->CurrentFont.lfHeight = GetDeviceCaps(hdc, LOGPIXELSY) / 5;
 
     infoPtr->CurrentFont.lfCharSet =  DEFAULT_CHARSET;
-    wcsncpy(infoPtr->CurrentFont.lfFaceName,
-            lpFontName,
-            sizeof(infoPtr->CurrentFont.lfFaceName) / sizeof(infoPtr->CurrentFont.lfFaceName[0]));
+    lstrcpynW(infoPtr->CurrentFont.lfFaceName,
+              lpFontName,
+              SIZEOF(infoPtr->CurrentFont.lfFaceName));
 
     infoPtr->hFont = CreateFontIndirectW(&infoPtr->CurrentFont);
 
@@ -240,14 +276,17 @@ SetFont(PMAP infoPtr,
                    NULL,
                    TRUE);
 
+    if (infoPtr->pActiveCell) 
+        infoPtr->pActiveCell->bActive = FALSE;
     infoPtr->pActiveCell = &infoPtr->Cells[0][0];
+    infoPtr->pActiveCell->bActive = TRUE;
 
     // Get all the valid glyphs in this font
 
     SelectObject(hdc, infoPtr->hFont);
 
-    for (i = 0; i < MAX_GLYPHS; i++)
-        ch[i] = (WCHAR)i;
+    // Get the code page associated with the selected 'character set'
+    GetPossibleCharacters(ch, MAX_GLYPHS, infoPtr->CharMap);
 
     if (GetGlyphIndicesW(hdc,
                          ch,
@@ -258,7 +297,7 @@ SetFont(PMAP infoPtr,
         j = 0;
         for (i = 0; i < MAX_GLYPHS; i++)
         {
-            if (out[i] != 0xffff)
+            if (out[i] != 0xffff && out[i] != 0x0000 && ch[i] != 0x0000)
             {
                 infoPtr->ValidGlyphs[j] = ch[i];
                 j++;
@@ -312,64 +351,55 @@ OnClick(PMAP infoPtr,
         WORD ptx,
         WORD pty)
 {
-    POINT pt;
-    INT x, y;
+    INT x, y, i;
 
-    pt.x = ptx;
-    pt.y = pty;
+    /*
+     * Find the cell the mouse pointer is over.
+     * Since each cell is the same size, this can be done quickly using CellSize.
+     * Clamp to XCELLS - 1 and YCELLS - 1 because the map can sometimes be slightly
+     * larger than infoPtr.CellSize * XCELLS , due to the map size being a non integer 
+     * multiple of infoPtr.CellSize .
+     */
+    x = min(XCELLS - 1, ptx / max(1, infoPtr->CellSize.cx));
+    y = min(YCELLS - 1, pty / max(1, infoPtr->CellSize.cy));
 
-    for (x = 0; x < XCELLS; x++)
-    for (y = 0; y < YCELLS; y++)
+    /* Make sure the mouse is within a valid glyph */
+    i = XCELLS * infoPtr->iYStart + y * XCELLS + x;
+    if (i >= infoPtr->NumValidGlyphs)
     {
-        if (PtInRect(&infoPtr->Cells[y][x].CellInt,
-                     pt))
+        if (infoPtr->pActiveCell) 
+            infoPtr->pActiveCell->bActive = FALSE;
+        infoPtr->pActiveCell = NULL;
+        return;
+    }
+
+    /* if the cell is not already active */
+    if (!infoPtr->Cells[y][x].bActive)
+    {
+        /* set previous active cell to inactive */
+        if (infoPtr->pActiveCell)
         {
-            /* if the cell is not already active */
-            if (!infoPtr->Cells[y][x].bActive)
+            /* invalidate normal cells, required when
+             * moving a small active cell via keyboard */
+            if (!infoPtr->pActiveCell->bLarge)
             {
-                /* set previous active cell to inactive */
-                if (infoPtr->pActiveCell)
-                {
-                    /* invalidate normal cells, required when
-                     * moving a small active cell via keyboard */
-                    if (!infoPtr->pActiveCell->bLarge)
-                    {
-                        InvalidateRect(infoPtr->hMapWnd,
-                                       &infoPtr->pActiveCell->CellInt,
-                                       TRUE);
-                    }
-
-                    infoPtr->pActiveCell->bActive = FALSE;
-                    infoPtr->pActiveCell->bLarge = FALSE;
-                }
-
-                /* set new cell to active */
-                infoPtr->pActiveCell = &infoPtr->Cells[y][x];
-                infoPtr->pActiveCell->bActive = TRUE;
-                infoPtr->pActiveCell->bLarge = TRUE;
-                if (infoPtr->hLrgWnd)
-                    MoveLargeCell(infoPtr);
-                else
-                    CreateLargeCell(infoPtr);
-            }
-            else
-            {
-                /* flick between large and small */
-                if (infoPtr->pActiveCell->bLarge)
-                {
-                    DestroyWindow(infoPtr->hLrgWnd);
-                    infoPtr->hLrgWnd = NULL;
-                }
-                else
-                {
-                    CreateLargeCell(infoPtr);
-                }
-
-                infoPtr->pActiveCell->bLarge = (infoPtr->pActiveCell->bLarge) ? FALSE : TRUE;
+                InvalidateRect(infoPtr->hMapWnd,
+                               &infoPtr->pActiveCell->CellInt,
+                               TRUE);
             }
 
-            break;
+            infoPtr->pActiveCell->bActive = FALSE;
+            infoPtr->pActiveCell->bLarge = FALSE;
         }
+
+        /* set new cell to active */
+        infoPtr->pActiveCell = &infoPtr->Cells[y][x];
+        infoPtr->pActiveCell->bActive = TRUE;
+        infoPtr->pActiveCell->bLarge = TRUE;
+        if (infoPtr->hLrgWnd)
+            MoveLargeCell(infoPtr);
+        else
+            CreateLargeCell(infoPtr);
     }
 }
 
@@ -473,6 +503,15 @@ OnVScroll(PMAP infoPtr,
         if (abs(iYDiff) < YCELLS)
         {
             RECT rect;
+
+            /* Invalidate the rect around the active cell since a new cell will become active */
+            if (infoPtr->pActiveCell && infoPtr->pActiveCell->bActive)
+            {
+                InvalidateRect(infoPtr->hMapWnd, 
+                               &infoPtr->pActiveCell->CellExt, 
+                               TRUE);
+            }
+            
             GetClientRect(infoPtr->hMapWnd, &rect);
             rect.top += 2;
             rect.bottom -= 2;
@@ -550,6 +589,7 @@ MapWndProc(HWND hwnd,
 {
     PMAP infoPtr;
     LRESULT Ret = 0;
+    WCHAR lfFaceName[LF_FACESIZE];
 
     infoPtr = (PMAP)GetWindowLongPtrW(hwnd,
                                       0);
@@ -577,12 +617,33 @@ MapWndProc(HWND hwnd,
             break;
         }
 
+        case WM_MOUSEMOVE:
+        {
+            if (wParam & MK_LBUTTON)
+            {
+                OnClick(infoPtr,
+                        LOWORD(lParam),
+                        HIWORD(lParam));
+            }
+            break;
+        }
+
         case WM_LBUTTONDBLCLK:
         {
+            if (!infoPtr->pActiveCell) 
+                break;
+
             NotifyParentOfSelection(infoPtr,
                                     FM_SETCHAR,
                                     infoPtr->pActiveCell->ch);
 
+            if (infoPtr->pActiveCell->bLarge)
+            {
+                DestroyWindow(infoPtr->hLrgWnd);
+                infoPtr->hLrgWnd = NULL;
+            }
+
+            infoPtr->pActiveCell->bLarge = FALSE;
 
             break;
         }
@@ -595,6 +656,14 @@ MapWndProc(HWND hwnd,
 
             break;
         }
+
+        case FM_SETCHARMAP:
+            infoPtr->CharMap = LOWORD(wParam);
+            wcsncpy(lfFaceName,
+                    infoPtr->CurrentFont.lfFaceName,
+                    SIZEOF(lfFaceName));
+            SetFont(infoPtr, lfFaceName);
+            break;
 
         case FM_SETFONT:
             SetFont(infoPtr, (LPWSTR)lParam);

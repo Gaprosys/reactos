@@ -7,12 +7,11 @@
 #include "shelltest.h"
 #include <shlwapi.h>
 #include <strsafe.h>
+#include <versionhelpers.h>
 
 #define NDEBUG
 #include <debug.h>
 #include <stdio.h>
-
-//#define ShellExecCmdLine ShellExecCmdLine
 
 #ifndef SECL_NO_UI
     #define SECL_NO_UI          0x2
@@ -22,7 +21,7 @@
     #define SECL_RUNAS          0x40
 #endif
 
-#ifdef ShellExecCmdLine
+#define ShellExecCmdLine proxy_ShellExecCmdLine
 
 #define shell32_hInstance   GetModuleHandle(NULL)
 #define IDS_FILE_NOT_FOUND  (-1)
@@ -37,6 +36,7 @@ static __inline void __SHCloneStrW(WCHAR **target, const WCHAR *source)
 	lstrcpyW(*target, source);
 }
 
+// NOTE: You have to sync the following code to dll/win32/shell32/shlexec.cpp.
 static LPCWSTR
 SplitParams(LPCWSTR psz, LPWSTR pszArg0, size_t cchArg0)
 {
@@ -132,12 +132,31 @@ HRESULT WINAPI ShellExecCmdLine(
     else
     {
         pchParams = SplitParams(lpCommand, szFile, _countof(szFile));
-        if (SearchPathW(NULL, szFile, NULL, _countof(szFile2), szFile2, NULL) ||
-            SearchPathW(NULL, szFile, wszExe, _countof(szFile2), szFile2, NULL) ||
-            SearchPathW(NULL, szFile, wszCom, _countof(szFile2), szFile2, NULL) ||
-            SearchPathW(pwszStartDir, szFile, NULL, _countof(szFile2), szFile2, NULL) ||
-            SearchPathW(pwszStartDir, szFile, wszExe, _countof(szFile2), szFile2, NULL) ||
-            SearchPathW(pwszStartDir, szFile, wszCom, _countof(szFile2), szFile2, NULL))
+        if (szFile[0] != UNICODE_NULL && szFile[1] == L':' &&
+            szFile[2] == UNICODE_NULL)
+        {
+            PathAddBackslashW(szFile);
+        }
+
+        WCHAR szCurDir[MAX_PATH];
+        GetCurrentDirectoryW(_countof(szCurDir), szCurDir);
+        if (pwszStartDir)
+        {
+            SetCurrentDirectoryW(pwszStartDir);
+        }
+
+        if (PathIsRelativeW(szFile) &&
+            GetFullPathNameW(szFile, _countof(szFile2), szFile2, NULL) &&
+            PathFileExistsW(szFile2))
+        {
+            StringCchCopyW(szFile, _countof(szFile), szFile2);
+        }
+        else if (SearchPathW(NULL, szFile, NULL, _countof(szFile2), szFile2, NULL) ||
+                 SearchPathW(NULL, szFile, wszExe, _countof(szFile2), szFile2, NULL) ||
+                 SearchPathW(NULL, szFile, wszCom, _countof(szFile2), szFile2, NULL) ||
+                 SearchPathW(pwszStartDir, szFile, NULL, _countof(szFile2), szFile2, NULL) ||
+                 SearchPathW(pwszStartDir, szFile, wszExe, _countof(szFile2), szFile2, NULL) ||
+                 SearchPathW(pwszStartDir, szFile, wszCom, _countof(szFile2), szFile2, NULL))
         {
             StringCchCopyW(szFile, _countof(szFile), szFile2);
         }
@@ -150,6 +169,11 @@ HRESULT WINAPI ShellExecCmdLine(
         {
             StringCchCopyW(szFile, _countof(szFile), szFile2);
             pchParams = NULL;
+        }
+
+        if (pwszStartDir)
+        {
+            SetCurrentDirectoryW(szCurDir);
         }
 
         if (!(dwSeclFlags & SECL_ALLOW_NONEXE))
@@ -211,10 +235,11 @@ HRESULT WINAPI ShellExecCmdLine(
 
     return HRESULT_FROM_WIN32(dwError);
 }
-#else
-    typedef HRESULT (WINAPI *SHELLEXECCMDLINE)(HWND, LPCWSTR, LPCWSTR, INT, LPVOID, DWORD);
-    SHELLEXECCMDLINE g_pShellExecCmdLine = NULL;
-#endif
+
+#undef ShellExecCmdLine
+
+typedef HRESULT (WINAPI *SHELLEXECCMDLINE)(HWND, LPCWSTR, LPCWSTR, INT, LPVOID, DWORD);
+SHELLEXECCMDLINE g_pShellExecCmdLine = NULL;
 
 typedef struct TEST_ENTRY
 {
@@ -371,6 +396,12 @@ static const TEST_ENTRY s_entries[] =
     { __LINE__, HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND), TRUE, L"Notepad", L"\"invalid program.exe\"", L"C:\\Program Files" },
     { __LINE__, HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND), TRUE, L"Notepad", L"\"invalid program.exe\" \"Test File.txt\"", NULL },
     { __LINE__, HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND), TRUE, L"Notepad", L"\"invalid program.exe\" \"Test File.txt\"", L"." },
+    // My Documents
+    { __LINE__, S_OK, TRUE, NULL, L"::{450d8fba-ad25-11d0-98a8-0800361b1103}", NULL },
+    { __LINE__, S_OK, TRUE, NULL, L"shell:::{450d8fba-ad25-11d0-98a8-0800361b1103}", NULL },
+    // Control Panel
+    { __LINE__, S_OK, TRUE, NULL, L"::{5399E694-6CE5-4D6C-8FCE-1D8870FDCBA0}", NULL },
+    { __LINE__, S_OK, TRUE, NULL, L"shell:::{5399E694-6CE5-4D6C-8FCE-1D8870FDCBA0}", NULL },
 };
 
 static void DoEntry(const TEST_ENTRY *pEntry)
@@ -385,13 +416,16 @@ static void DoEntry(const TEST_ENTRY *pEntry)
 
     _SEH2_TRY
     {
-#ifdef ShellExecCmdLine
-        hr = ShellExecCmdLine(NULL, pEntry->pwszCommand, pEntry->pwszStartDir,
-                              SW_SHOWNORMAL, NULL, dwSeclFlags);
-#else
-        hr = (*g_pShellExecCmdLine)(NULL, pEntry->pwszCommand, pEntry->pwszStartDir,
-                                    SW_SHOWNORMAL, NULL, dwSeclFlags);
-#endif
+        if (IsReactOS())
+        {
+            hr = proxy_ShellExecCmdLine(NULL, pEntry->pwszCommand, pEntry->pwszStartDir,
+                                        SW_SHOWNORMAL, NULL, dwSeclFlags);
+        }
+        else
+        {
+            hr = (*g_pShellExecCmdLine)(NULL, pEntry->pwszCommand, pEntry->pwszStartDir,
+                                        SW_SHOWNORMAL, NULL, dwSeclFlags);
+        }
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
@@ -429,15 +463,22 @@ START_TEST(ShellExecCmdLine)
 {
     using namespace std;
 
-#ifndef ShellExecCmdLine
-    HMODULE hShell32 = GetModuleHandleA("shell32");
-    g_pShellExecCmdLine = (SHELLEXECCMDLINE)GetProcAddress(hShell32, (LPCSTR)(INT_PTR)265);
-    if (!g_pShellExecCmdLine)
+    if (!IsReactOS())
     {
-        skip("ShellExecCmdLine is not found\n");
-        return;
+        if (!IsWindowsVistaOrGreater())
+        {
+            skip("ShellExecCmdLine is not available on this platform\n");
+            return;
+        }
+
+        HMODULE hShell32 = GetModuleHandleA("shell32");
+        g_pShellExecCmdLine = (SHELLEXECCMDLINE)GetProcAddress(hShell32, (LPCSTR)(INT_PTR)265);
+        if (!g_pShellExecCmdLine)
+        {
+            skip("ShellExecCmdLine is not found\n");
+            return;
+        }
     }
-#endif
 
     // s_testfile1
     FILE *fp = fopen(s_testfile1, "wb");

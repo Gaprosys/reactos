@@ -779,6 +779,12 @@ typedef struct _DEBUG_EVENT {
 	} u;
 } DEBUG_EVENT,*LPDEBUG_EVENT;
 
+#ifndef MIDL_PASS
+typedef PCONTEXT LPCONTEXT;
+typedef PEXCEPTION_RECORD LPEXCEPTION_RECORD;
+typedef PEXCEPTION_POINTERS LPEXCEPTION_POINTERS;
+#endif
+
 typedef struct _OVERLAPPED {
 	ULONG_PTR Internal;
 	ULONG_PTR InternalHigh;
@@ -791,6 +797,13 @@ typedef struct _OVERLAPPED {
 	} DUMMYUNIONNAME;
 	HANDLE hEvent;
 } OVERLAPPED, *POVERLAPPED, *LPOVERLAPPED;
+
+typedef struct _OVERLAPPED_ENTRY {
+    ULONG_PTR lpCompletionKey;
+    LPOVERLAPPED lpOverlapped;
+    ULONG_PTR Internal;
+    DWORD dwNumberOfBytesTransferred;
+} OVERLAPPED_ENTRY, *LPOVERLAPPED_ENTRY;
 
 typedef struct _STARTUPINFOA {
 	DWORD	cb;
@@ -1138,7 +1151,7 @@ typedef struct _SYSTEM_POWER_STATUS {
 	BYTE ACLineStatus;
 	BYTE BatteryFlag;
 	BYTE BatteryLifePercent;
-	BYTE Reserved1;
+	BYTE SystemStatusFlag;
 	DWORD BatteryLifeTime;
 	DWORD BatteryFullLifeTime;
 } SYSTEM_POWER_STATUS,*LPSYSTEM_POWER_STATUS;
@@ -1626,7 +1639,7 @@ BOOL WINAPI ConvertFiberToThread(void);
 #endif
 _Ret_maybenull_ PVOID WINAPI ConvertThreadToFiber(_In_opt_ PVOID);
 BOOL WINAPI CopyFileA(_In_ LPCSTR, _In_ LPCSTR, _In_ BOOL);
-BOOL WINAPI CopyFileW(_In_ LPCWSTR, _In_ LPCWSTR, _In_ BOOL);
+BOOL WINAPI CopyFileW(_In_ LPCWSTR lpExistingFileName, _In_ LPCWSTR lpNewFileName, _In_ BOOL bFailIfExists);
 BOOL WINAPI CopyFileExA(_In_ LPCSTR, _In_ LPCSTR, _In_opt_ LPPROGRESS_ROUTINE, _In_opt_ LPVOID, _In_opt_ LPBOOL, _In_ DWORD);
 BOOL WINAPI CopyFileExW(_In_ LPCWSTR, _In_ LPCWSTR, _In_opt_ LPPROGRESS_ROUTINE, _In_opt_ LPVOID, _In_opt_ LPBOOL, _In_ DWORD);
 #define MoveMemory RtlMoveMemory
@@ -1639,12 +1652,12 @@ BOOL WINAPI CopySid(DWORD,PSID,PSID);
 HANDLE WINAPI CreateActCtxA(_In_ PCACTCTXA);
 HANDLE WINAPI CreateActCtxW(_In_ PCACTCTXW);
 #endif
-BOOL WINAPI CreateDirectoryA(LPCSTR,LPSECURITY_ATTRIBUTES);
-BOOL WINAPI CreateDirectoryW(LPCWSTR,LPSECURITY_ATTRIBUTES);
+BOOL WINAPI CreateDirectoryA(LPCSTR lpPathName,LPSECURITY_ATTRIBUTES lpSecurityAttributes);
+BOOL WINAPI CreateDirectoryW(LPCWSTR lpPathName,LPSECURITY_ATTRIBUTES lpSecurityAttributes);
 BOOL WINAPI CreateDirectoryExA(_In_ LPCSTR, _In_ LPCSTR, _In_opt_ LPSECURITY_ATTRIBUTES);
 BOOL WINAPI CreateDirectoryExW(_In_ LPCWSTR, _In_ LPCWSTR, _In_opt_ LPSECURITY_ATTRIBUTES);
-HANDLE WINAPI CreateEventA(LPSECURITY_ATTRIBUTES,BOOL,BOOL,LPCSTR);
-HANDLE WINAPI CreateEventW(LPSECURITY_ATTRIBUTES,BOOL,BOOL,LPCWSTR);
+HANDLE WINAPI CreateEventA(_In_opt_ LPSECURITY_ATTRIBUTES lpEventAttributes, _In_ BOOL bManualReset, _In_ BOOL bInitialState, _In_opt_ LPCSTR lpName);
+HANDLE WINAPI CreateEventW(_In_opt_ LPSECURITY_ATTRIBUTES,_In_ BOOL bManualReset, _In_ BOOL bInitialState,_In_opt_ LPCWSTR lpName);
 #if (_WIN32_WINNT >= 0x0600)
 HANDLE WINAPI CreateEventExA(LPSECURITY_ATTRIBUTES,LPCSTR,DWORD,DWORD);
 HANDLE WINAPI CreateEventExW(LPSECURITY_ATTRIBUTES,LPCWSTR,DWORD,DWORD);
@@ -1839,7 +1852,7 @@ BOOL WINAPI EqualSid(PSID,PSID);
 DWORD WINAPI EraseTape(_In_ HANDLE, _In_ DWORD, _In_ BOOL);
 BOOL WINAPI EscapeCommFunction(_In_ HANDLE, _In_ DWORD);
 DECLSPEC_NORETURN void WINAPI ExitProcess(UINT);
-DECLSPEC_NORETURN void WINAPI ExitThread(DWORD);
+DECLSPEC_NORETURN void WINAPI ExitThread(_In_ DWORD dwExitCode);
 DWORD WINAPI ExpandEnvironmentStringsA(LPCSTR,LPSTR,DWORD);
 DWORD WINAPI ExpandEnvironmentStringsW(LPCWSTR,LPWSTR,DWORD);
 void WINAPI FatalAppExitA(UINT,LPCSTR);
@@ -1963,8 +1976,8 @@ DWORD WINAPI FlsAlloc(PFLS_CALLBACK_FUNCTION);
 PVOID WINAPI FlsGetValue(DWORD);
 BOOL WINAPI FlsSetValue(DWORD,PVOID);
 BOOL WINAPI FlsFree(DWORD);
-DWORD WINAPI FormatMessageA(DWORD,LPCVOID,DWORD,DWORD,LPSTR,DWORD,va_list*);
-DWORD WINAPI FormatMessageW(DWORD,LPCVOID,DWORD,DWORD,LPWSTR,DWORD,va_list*);
+DWORD WINAPI FormatMessageA(DWORD dwFlags, LPCVOID lpSource, DWORD dwMessageId, DWORD dwLanguageId, LPSTR lpBuffer, DWORD nSize, va_list* Arguments);
+DWORD WINAPI FormatMessageW(DWORD dwFlags, LPCVOID lpSource, DWORD dwMessageId, DWORD dwLanguageId, LPWSTR lpBuffer, DWORD nSize, va_list* Arguments);
 BOOL WINAPI FreeEnvironmentStringsA(LPSTR);
 BOOL WINAPI FreeEnvironmentStringsW(LPWSTR);
 BOOL WINAPI FreeLibrary(HMODULE);
@@ -2362,6 +2375,16 @@ VOID WINAPI GetStartupInfoW(LPSTARTUPINFOW);
 HANDLE WINAPI GetStdHandle(_In_ DWORD);
 UINT WINAPI GetSystemDirectoryA(LPSTR,UINT);
 UINT WINAPI GetSystemDirectoryW(LPWSTR,UINT);
+
+WINBASEAPI
+UINT
+WINAPI
+GetSystemFirmwareTable(
+  _In_ DWORD FirmwareTableProviderSignature,
+  _In_ DWORD FirmwareTableID,
+  _Out_writes_bytes_to_opt_(BufferSize,return) PVOID pFirmwareTableBuffer,
+  _In_ DWORD BufferSize);
+
 VOID WINAPI GetSystemInfo(LPSYSTEM_INFO);
 BOOL WINAPI GetSystemPowerStatus(_Out_ LPSYSTEM_POWER_STATUS);
 #if (_WIN32_WINNT >= 0x0502)
@@ -3238,7 +3261,7 @@ WaitForMultipleObjects(
   _In_ DWORD dwMilliseconds);
 
 DWORD WINAPI WaitForMultipleObjectsEx(DWORD,const HANDLE*,BOOL,DWORD,BOOL);
-DWORD WINAPI WaitForSingleObject(HANDLE,DWORD);
+DWORD WINAPI WaitForSingleObject(_In_ HANDLE hHandle, _In_ DWORD dwMilliseconds);
 DWORD WINAPI WaitForSingleObjectEx(HANDLE,DWORD,BOOL);
 BOOL WINAPI WaitNamedPipeA(_In_ LPCSTR, _In_ DWORD);
 BOOL WINAPI WaitNamedPipeW(_In_ LPCWSTR, _In_ DWORD);
@@ -3921,6 +3944,11 @@ QueryDepthSList(
   _In_ PSLIST_HEADER ListHead);
 
 #endif /* _SLIST_HEADER_ */
+
+#ifdef __WINESRC__
+/* Wine specific. Basically MultiByteToWideChar for us. */
+WCHAR * CDECL wine_get_dos_file_name(LPCSTR str);
+#endif
 
 #ifdef _MSC_VER
 #pragma warning(pop)

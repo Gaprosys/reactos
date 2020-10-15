@@ -854,7 +854,6 @@ static LRESULT CALLBACK BUTTON_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, L
             mouse_event.dwHoverTime = 1;
             TrackMouseEvent(&mouse_event);
         }
-        break;
 #else
 
         if (!TrackMouseEvent(&mouse_event) || !(mouse_event.dwFlags & (TME_HOVER | TME_LEAVE)))
@@ -864,6 +863,7 @@ static LRESULT CALLBACK BUTTON_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, L
             mouse_event.dwHoverTime = 1;
             TrackMouseEvent(&mouse_event);
         }
+#endif
 
         if ((wParam & MK_LBUTTON) && GetCapture() == hWnd)
         {
@@ -871,7 +871,6 @@ static LRESULT CALLBACK BUTTON_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, L
             SendMessageW( hWnd, BM_SETSTATE, PtInRect(&rect, pt), 0 );
         }
         break;
-#endif
     }
 
 #ifndef __REACTOS__
@@ -1211,7 +1210,11 @@ static UINT BUTTON_CalcLabelRect(const BUTTON_INFO *infoPtr, HDC hdc, RECT *rc)
           }
 
           if ((hFont = infoPtr->font)) hPrevFont = SelectObject( hdc, hFont );
+#ifdef __REACTOS__
+          DrawTextW(hdc, text, -1, &r, ((dtStyle | DT_CALCRECT) & ~(DT_VCENTER | DT_BOTTOM)));
+#else
           DrawTextW(hdc, text, -1, &r, dtStyle | DT_CALCRECT);
+#endif
           if (hPrevFont) SelectObject( hdc, hPrevFont );
           heap_free( text );
 #ifdef __REACTOS__

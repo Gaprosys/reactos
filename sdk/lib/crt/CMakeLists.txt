@@ -9,10 +9,7 @@ if(ARCH STREQUAL "i386")
         list(APPEND CHKSTK_SOURCE except/i386/chkstk_ms.s)
     endif()
 elseif(ARCH STREQUAL "amd64")
-    list(APPEND CHKSTK_ASM_SOURCE except/amd64/chkstk_asm.s)
-    if(NOT MSVC)
-        list(APPEND CHKSTK_SOURCE except/amd64/chkstk_ms.s)
-    endif()
+    list(APPEND CHKSTK_ASM_SOURCE except/amd64/chkstk_ms.s)
 elseif(ARCH STREQUAL "arm")
     list(APPEND CHKSTK_ASM_SOURCE except/arm/chkstk_asm.s)
     if(NOT MSVC)
@@ -47,13 +44,13 @@ add_library(user32_wsprintf
     string/wcstombs_nt.c)
 
 add_dependencies(user32_wsprintf psdk)
-add_target_compile_definitions(user32_wsprintf _USER32_WSPRINTF)
+target_compile_definitions(user32_wsprintf PRIVATE _USER32_WSPRINTF)
 
 add_library(memcmp mem/memcmp.c)
 add_dependencies(memcmp psdk)
 
 add_library(getopt misc/getopt.c)
-add_target_compile_definitions(getopt _DLL __USE_CRTIMP)
+target_compile_definitions(getopt PRIVATE _DLL __USE_CRTIMP)
 add_dependencies(getopt psdk)
 
 add_library(strtol
@@ -64,7 +61,7 @@ add_library(strtol
     string/strtoul.c
     string/strtoull.c
     string/wctype.c)
-add_target_compile_definitions(strtol _LIBCNT_)
+target_compile_definitions(strtol PRIVATE _LIBCNT_)
 add_dependencies(strtol psdk)
 
 

@@ -26,6 +26,7 @@ list(APPEND SOURCE
     NtProtectVirtualMemory.c
     NtQueryInformationFile.c
     NtQueryInformationProcess.c
+    NtQueryInformationThread.c
     NtQueryKey.c
     NtQuerySystemEnvironmentValue.c
     NtQuerySystemInformation.c
@@ -33,13 +34,17 @@ list(APPEND SOURCE
     NtReadFile.c
     NtSaveKey.c
     NtSetInformationFile.c
+    NtSetInformationProcess.c
+    NtSetInformationThread.c
     NtSetValueKey.c
     NtSetVolumeInformationFile.c
+    NtUnloadDriver.c
     NtWriteFile.c
     RtlAllocateHeap.c
     RtlBitmap.c
     RtlComputePrivatizedDllName_U.c
     RtlCopyMappedMemory.c
+    RtlDebugInformation.c
     RtlDeleteAce.c
     RtlDetermineDosPathNameType.c
     RtlDoesFileExists.c
@@ -54,37 +59,44 @@ list(APPEND SOURCE
     RtlGetFullPathName_UstrEx.c
     RtlGetLengthWithoutTrailingPathSeperators.c
     RtlGetLongestNtPathLength.c
+    RtlGetNtProductType.c
+    RtlGetUnloadEventTrace.c
     RtlHandle.c
     RtlImageRvaToVa.c
-    RtlInitializeBitMap.c
     RtlIsNameLegalDOS8Dot3.c
     RtlMemoryStream.c
+    RtlMultipleAllocateHeap.c
     RtlNtPathNameToDosPathName.c
     RtlpEnsureBufferSize.c
     RtlQueryTimeZoneInfo.c
     RtlReAllocateHeap.c
     RtlUnicodeStringToAnsiString.c
     RtlUpcaseUnicodeStringToCountedOemString.c
+    RtlValidateUnicodeString.c
     StackOverflow.c
     SystemInfo.c
-    Timer.c
-    precomp.h)
+    Timer.c)
 
 if(ARCH STREQUAL "i386")
     add_asm_files(ntdll_apitest_asm i386/NtContinue.S)
 endif()
 
+list(APPEND PCH_SKIP_SOURCE
+    testlist.c)
+
 add_rc_deps(testdata.rc ${CMAKE_CURRENT_BINARY_DIR}/load_notifications/load_notifications.dll)
+
 add_executable(ntdll_apitest
     ${SOURCE}
     ${ntdll_apitest_asm}
+    ${PCH_SKIP_SOURCE}
     testdata.rc
-    ${CMAKE_CURRENT_BINARY_DIR}/ntdll_apitest.def
-    testlist.c)
+    ${CMAKE_CURRENT_BINARY_DIR}/ntdll_apitest.def)
+
 target_link_libraries(ntdll_apitest wine uuid ${PSEH_LIB})
 set_module_type(ntdll_apitest win32cui)
 add_importlibs(ntdll_apitest msvcrt advapi32 kernel32 ntdll)
-add_pch(ntdll_apitest precomp.h SOURCE)
+add_pch(ntdll_apitest precomp.h "${PCH_SKIP_SOURCE}")
 
 if(NOT MSVC)
     set_source_files_properties(RtlGetFullPathName_UstrEx.c PROPERTIES COMPILE_FLAGS "-Wno-format")

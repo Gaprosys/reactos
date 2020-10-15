@@ -641,10 +641,12 @@ LdrpCreateDllSection(IN PUNICODE_STRING FullName,
 
         /* Increment the error count */
         if (LdrpInLdrInit) LdrpFatalHardErrorCount++;
+
+        goto Exit;
     }
 
     /* Check for Safer restrictions */
-    if (DllCharacteristics &&
+    if (!DllCharacteristics ||
         !(*DllCharacteristics & IMAGE_FILE_SYSTEM))
     {
         /* Make sure it's executable */
@@ -683,6 +685,7 @@ LdrpCreateDllSection(IN PUNICODE_STRING FullName,
         }
     }
 
+Exit:
     /* Close the file handle, we don't need it */
     NtClose(FileHandle);
 
@@ -1416,6 +1419,8 @@ SkipCheck:
                 /* Setup for hard error */
                 HardErrorParameters[0] = (ULONG_PTR)&IllegalDll;
                 HardErrorParameters[1] = (ULONG_PTR)&OverlapDll;
+
+                DPRINT1("Illegal DLL relocation! %wZ overlaps %wZ\n", &OverlapDll, &IllegalDll);
 
                 /* Raise the error */
                 ZwRaiseHardError(STATUS_ILLEGAL_DLL_RELOCATION,

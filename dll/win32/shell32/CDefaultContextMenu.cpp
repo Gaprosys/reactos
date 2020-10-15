@@ -8,14 +8,6 @@
 
 #include "precomp.h"
 
-extern "C"
-{
-    //fixme: this isn't in wine's shlwapi header, and the definition doesnt match the
-    // windows headers. When wine's header and lib are fixed this can be removed.
-    DWORD WINAPI SHAnsiToUnicode(LPCSTR lpSrcStr, LPWSTR lpDstStr, int iLen);
-    INT WINAPI SHUnicodeToAnsi(LPCWSTR lpSrcStr, LPSTR lpDstStr, INT iLen);
-};
-
 WINE_DEFAULT_DEBUG_CHANNEL(dmenu);
 
 typedef struct _DynamicShellEntry_
@@ -56,8 +48,9 @@ struct _StaticInvokeCommandMap_
     { "delete", FCIDM_SHVIEW_DELETE},
     { "properties", FCIDM_SHVIEW_PROPERTIES},
     { "rename", FCIDM_SHVIEW_RENAME},
+    { "copyto", FCIDM_SHVIEW_COPYTO },
+    { "moveto", FCIDM_SHVIEW_MOVETO },
 };
-
 
 class CDefaultContextMenu :
     public CComObjectRootEx<CComMultiThreadModelNoCS>,
@@ -102,7 +95,9 @@ class CDefaultContextMenu :
         HRESULT DoCopyOrCut(LPCMINVOKECOMMANDINFO lpcmi, BOOL bCopy);
         HRESULT DoRename(LPCMINVOKECOMMANDINFO lpcmi);
         HRESULT DoProperties(LPCMINVOKECOMMANDINFO lpcmi);
+        HRESULT DoUndo(LPCMINVOKECOMMANDINFO lpcmi);
         HRESULT DoCreateNewFolder(LPCMINVOKECOMMANDINFO lpici);
+        HRESULT DoCopyToMoveToFolder(LPCMINVOKECOMMANDINFO lpici, BOOL bCopy);
         HRESULT InvokeShellExt(LPCMINVOKECOMMANDINFO lpcmi);
         HRESULT InvokeRegVerb(LPCMINVOKECOMMANDINFO lpcmi);
         DWORD BrowserFlagsFromVerb(LPCMINVOKECOMMANDINFO lpcmi, PStaticShellEntry pEntry);
@@ -325,18 +320,13 @@ HasClipboardData()
 
     if (SUCCEEDED(OleGetClipboard(&pDataObj)))
     {
-        STGMEDIUM medium;
         FORMATETC formatetc;
 
         TRACE("pDataObj=%p\n", pDataObj.p);
 
         /* Set the FORMATETC structure*/
         InitFormatEtc(formatetc, RegisterClipboardFormatW(CFSTR_SHELLIDLIST), TYMED_HGLOBAL);
-        if (SUCCEEDED(pDataObj->GetData(&formatetc, &medium)))
-        {
-            bRet = TRUE;
-            ReleaseStgMedium(&medium);
-        }
+        bRet = SUCCEEDED(pDataObj->QueryGetData(&formatetc));
     }
 
     return bRet;
@@ -386,7 +376,7 @@ CDefaultContextMenu::LoadDynamicContextMenuHandler(HKEY hKey, const CLSID *pclsi
     hr = pExtInit->Initialize(m_pidlFolder, m_pDataObj, hKey);
     if (FAILED(hr))
     {
-        ERR("IShellExtInit::Initialize failed.clsid %s hr 0x%x\n", wine_dbgstr_guid(pclsid), hr);
+        WARN("IShellExtInit::Initialize failed.clsid %s hr 0x%x\n", wine_dbgstr_guid(pclsid), hr);
         return hr;
     }
 
@@ -567,49 +557,62 @@ CDefaultContextMenu::AddStaticContextMenusToMenu(
         /* By default use verb for menu item name */
         mii.dwTypeData = pEntry->szVerb;
 
+        WCHAR wszKey[256];
+        HRESULT hr;
+        hr = StringCbPrintfW(wszKey, sizeof(wszKey), L"shell\\%s", pEntry->szVerb);
+        if (FAILED_UNEXPECTEDLY(hr))
+        {
+            pEntry = pEntry->pNext;
+            continue;
+        }
+
+        BOOL Extended = FALSE;
+        HKEY hkVerb;
         if (idResource > 0)
         {
             if (LoadStringW(shell32_hInstance, idResource, wszVerb, _countof(wszVerb)))
                 mii.dwTypeData = wszVerb; /* use translated verb */
             else
                 ERR("Failed to load string\n");
+
+            LONG res = RegOpenKeyW(pEntry->hkClass, wszKey, &hkVerb);
+            if (res == ERROR_SUCCESS)
+            {
+                res = RegQueryValueExW(hkVerb, L"Extended", NULL, NULL, NULL, NULL);
+                Extended = (res == ERROR_SUCCESS);
+
+                RegCloseKey(hkVerb);
+            }
         }
         else
         {
-            WCHAR wszKey[256];
-            HRESULT hr = StringCbPrintfW(wszKey, sizeof(wszKey), L"shell\\%s", pEntry->szVerb);
-
-            if (SUCCEEDED(hr))
+            LONG res = RegOpenKeyW(pEntry->hkClass, wszKey, &hkVerb);
+            if (res == ERROR_SUCCESS)
             {
-                HKEY hkVerb;
                 DWORD cbVerb = sizeof(wszVerb);
-                LONG res = RegOpenKeyW(pEntry->hkClass, wszKey, &hkVerb);
+                res = RegLoadMUIStringW(hkVerb, NULL, wszVerb, cbVerb, NULL, 0, NULL);
                 if (res == ERROR_SUCCESS)
                 {
-                    res = RegLoadMUIStringW(hkVerb,
-                                            NULL,
-                                            wszVerb,
-                                            cbVerb,
-                                            NULL,
-                                            0,
-                                            NULL);
-                    if (res == ERROR_SUCCESS)
-                    {
-                        /* use description for the menu entry */
-                        mii.dwTypeData = wszVerb;
-                    }
-
-                    RegCloseKey(hkVerb);
+                    /* use description for the menu entry */
+                    mii.dwTypeData = wszVerb;
                 }
+
+                res = RegQueryValueExW(hkVerb, L"Extended", NULL, NULL, NULL, NULL);
+                Extended = (res == ERROR_SUCCESS);
+
+                RegCloseKey(hkVerb);
             }
         }
 
-        mii.cch = wcslen(mii.dwTypeData);
-        mii.fState = fState;
-        mii.wID = iIdCmdFirst + cIds;
-        InsertMenuItemW(hMenu, *pIndexMenu, TRUE, &mii);
-        (*pIndexMenu)++;
-        cIds++;
+        if (!Extended || GetAsyncKeyState(VK_SHIFT) < 0)
+        {
+            mii.cch = wcslen(mii.dwTypeData);
+            mii.fState = fState;
+            mii.wID = iIdCmdFirst + cIds;
+            InsertMenuItemW(hMenu, *pIndexMenu, TRUE, &mii);
+            (*pIndexMenu)++;
+            cIds++;
+        }
 
         pEntry = pEntry->pNext;
 
@@ -840,18 +843,16 @@ HRESULT CDefaultContextMenu::DoCopyOrCut(LPCMINVOKECOMMANDINFO lpcmi, BOOL bCopy
     if (!m_cidl || !m_pDataObj)
         return E_FAIL;
 
-    if (!bCopy)
-    {
-        FORMATETC formatetc;
-        STGMEDIUM medium;
-        InitFormatEtc(formatetc, RegisterClipboardFormatW(CFSTR_PREFERREDDROPEFFECT), TYMED_HGLOBAL);
-        m_pDataObj->GetData(&formatetc, &medium);
-        DWORD * pdwFlag = (DWORD*)GlobalLock(medium.hGlobal);
-        if (pdwFlag)
-            *pdwFlag = DROPEFFECT_MOVE;
-        GlobalUnlock(medium.hGlobal);
-        m_pDataObj->SetData(&formatetc, &medium, TRUE);
-    }
+    FORMATETC formatetc;
+    InitFormatEtc(formatetc, RegisterClipboardFormatW(CFSTR_PREFERREDDROPEFFECT), TYMED_HGLOBAL);
+    STGMEDIUM medium = {0};
+    medium.tymed = TYMED_HGLOBAL;
+    medium.hGlobal = GlobalAlloc(GHND, sizeof(DWORD));
+    DWORD* pdwFlag = (DWORD*)GlobalLock(medium.hGlobal);
+    if (pdwFlag)
+        *pdwFlag = bCopy ? DROPEFFECT_COPY : DROPEFFECT_MOVE;
+    GlobalUnlock(medium.hGlobal);
+    m_pDataObj->SetData(&formatetc, &medium, TRUE);
 
     HRESULT hr = OleSetClipboard(m_pDataObj);
     if (FAILED_UNEXPECTEDLY(hr))
@@ -893,6 +894,50 @@ CDefaultContextMenu::DoProperties(
     _DoCallback(DFM_INVOKECOMMAND, DFM_CMD_PROPERTIES, NULL);
 
     return S_OK;
+}
+
+HRESULT
+CDefaultContextMenu::DoUndo(LPCMINVOKECOMMANDINFO lpcmi)
+{
+    ERR("TODO: Undo");
+    return E_NOTIMPL;
+}
+
+HRESULT
+CDefaultContextMenu::DoCopyToMoveToFolder(LPCMINVOKECOMMANDINFO lpici, BOOL bCopy)
+{
+    HRESULT hr = E_FAIL;
+    if (!m_pDataObj)
+    {
+        ERR("m_pDataObj is NULL\n");
+        return hr;
+    }
+
+    CComPtr<IContextMenu> pContextMenu;
+    if (bCopy)
+        hr = SHCoCreateInstance(NULL, &CLSID_CopyToMenu, NULL,
+                                IID_PPV_ARG(IContextMenu, &pContextMenu));
+    else
+        hr = SHCoCreateInstance(NULL, &CLSID_MoveToMenu, NULL,
+                                IID_PPV_ARG(IContextMenu, &pContextMenu));
+    if (FAILED_UNEXPECTEDLY(hr))
+        return hr;
+
+    CComPtr<IShellExtInit> pInit;
+    hr = pContextMenu->QueryInterface(IID_PPV_ARG(IShellExtInit, &pInit));
+    if (FAILED_UNEXPECTEDLY(hr))
+        return hr;
+
+    hr = pInit->Initialize(m_pidlFolder, m_pDataObj, NULL);
+    if (FAILED_UNEXPECTEDLY(hr))
+        return hr;
+
+    if (bCopy)
+        lpici->lpVerb = "copyto";
+    else
+        lpici->lpVerb = "moveto";
+
+    return pContextMenu->InvokeCommand(lpici);
 }
 
 // This code is taken from CNewMenu and should be shared between the 2 classes
@@ -1249,6 +1294,15 @@ CDefaultContextMenu::InvokeCommand(
         break;
     case FCIDM_SHVIEW_NEWFOLDER:
         Result = DoCreateNewFolder(&LocalInvokeInfo);
+        break;
+    case FCIDM_SHVIEW_COPYTO:
+        Result = DoCopyToMoveToFolder(&LocalInvokeInfo, TRUE);
+        break;
+    case FCIDM_SHVIEW_MOVETO:
+        Result = DoCopyToMoveToFolder(&LocalInvokeInfo, FALSE);
+        break;
+    case FCIDM_SHVIEW_UNDO:
+        Result = DoUndo(&LocalInvokeInfo);
         break;
     default:
         Result = E_INVALIDARG;

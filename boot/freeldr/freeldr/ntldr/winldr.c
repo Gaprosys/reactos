@@ -26,16 +26,28 @@ extern void WinLdrSetupEms(IN PCHAR BootOptions);
 
 PLOADER_SYSTEM_BLOCK WinLdrSystemBlock;
 
+BOOLEAN VirtualBias = FALSE;
+BOOLEAN SosEnabled = FALSE;
+BOOLEAN PaeEnabled = FALSE;
+BOOLEAN PaeDisabled = FALSE;
+BOOLEAN SafeBoot = FALSE;
+BOOLEAN BootLogo = FALSE;
+BOOLEAN NoexecuteDisabled = FALSE;
+BOOLEAN NoexecuteEnabled = FALSE;
+
 // debug stuff
 VOID DumpMemoryAllocMap(VOID);
 
 // Init "phase 0"
 VOID
-AllocateAndInitLPB(PLOADER_PARAMETER_BLOCK *OutLoaderBlock)
+AllocateAndInitLPB(
+    IN USHORT VersionToBoot,
+    OUT PLOADER_PARAMETER_BLOCK* OutLoaderBlock)
 {
     PLOADER_PARAMETER_BLOCK LoaderBlock;
+    PLOADER_PARAMETER_EXTENSION Extension;
 
-    /* Allocate and zero-init the LPB */
+    /* Allocate and zero-init the Loader Parameter Block */
     WinLdrSystemBlock = MmAllocateMemoryWithType(sizeof(LOADER_SYSTEM_BLOCK),
                                                  LoaderSystemBlock);
     if (WinLdrSystemBlock == NULL)
@@ -48,6 +60,13 @@ AllocateAndInitLPB(PLOADER_PARAMETER_BLOCK *OutLoaderBlock)
 
     LoaderBlock = &WinLdrSystemBlock->LoaderBlock;
     LoaderBlock->NlsData = &WinLdrSystemBlock->NlsDataBlock;
+
+    /* Initialize the Loader Block Extension */
+    Extension = &WinLdrSystemBlock->Extension;
+    LoaderBlock->Extension = Extension;
+    Extension->Size = sizeof(LOADER_PARAMETER_EXTENSION);
+    Extension->MajorVersion = (VersionToBoot & 0xFF00) >> 8;
+    Extension->MinorVersion = (VersionToBoot & 0xFF);
 
     /* Init three critical lists, used right away */
     InitializeListHead(&LoaderBlock->LoadOrderListHead);
@@ -99,16 +118,16 @@ WinLdrInitializePhase1(PLOADER_PARAMETER_BLOCK LoaderBlock,
 // SetupBlock->ArcSetupDeviceName must be the path to the setup **SOURCE**,
 // and not the setup boot path. Indeed they may differ!!
 //
-    /* If we have a setup block, adjust also its ARC path */
     if (LoaderBlock->SetupLdrBlock)
     {
         PSETUP_LOADER_BLOCK SetupBlock = LoaderBlock->SetupLdrBlock;
 
-        /* Matches ArcBoot path */
+        /* Adjust the ARC path in the setup block - Matches ArcBoot path */
         SetupBlock->ArcSetupDeviceName = WinLdrSystemBlock->ArcBootDeviceName;
         SetupBlock->ArcSetupDeviceName = PaToVa(SetupBlock->ArcSetupDeviceName);
 
-        /* Note: LoaderBlock->SetupLdrBlock is PaToVa'ed at the end of this function */
+        /* Convert the setup block pointer */
+        LoaderBlock->SetupLdrBlock = PaToVa(LoaderBlock->SetupLdrBlock);
     }
 
     /* Fill ARC HalDevice, it matches ArcBoot path */
@@ -162,7 +181,7 @@ WinLdrInitializePhase1(PLOADER_PARAMETER_BLOCK LoaderBlock,
                        &ArcDiskSig->DiskSignature.ListEntry);
     }
 
-    /* Convert all list's to Virtual address */
+    /* Convert all lists to Virtual address */
 
     /* Convert the ArcDisks list to virtual address */
     List_PaToVa(&LoaderBlock->ArcDiskInformation->DiskSignatureListHead);
@@ -181,11 +200,9 @@ WinLdrInitializePhase1(PLOADER_PARAMETER_BLOCK LoaderBlock,
     /* Convert list of boot drivers */
     List_PaToVa(&LoaderBlock->BootDriverListHead);
 
-    /* Initialize Extension now */
-    Extension = &WinLdrSystemBlock->Extension;
-    Extension->Size = sizeof(LOADER_PARAMETER_EXTENSION);
-    Extension->MajorVersion = (VersionToBoot & 0xFF00) >> 8;
-    Extension->MinorVersion = VersionToBoot & 0xFF;
+    Extension = LoaderBlock->Extension;
+
+    /* FIXME! HACK value for docking profile */
     Extension->Profile.Status = 2;
 
     /* Check if FreeLdr detected a ACPI table */
@@ -214,11 +231,8 @@ WinLdrInitializePhase1(PLOADER_PARAMETER_BLOCK LoaderBlock,
                                                     &Extension->DrvDBSize,
                                                     LoaderRegistryData));
 
-    /* Convert extension and setup block pointers */
-    LoaderBlock->Extension = PaToVa(Extension);
-
-    if (LoaderBlock->SetupLdrBlock)
-        LoaderBlock->SetupLdrBlock = PaToVa(LoaderBlock->SetupLdrBlock);
+    /* Convert the extension block pointer */
+    LoaderBlock->Extension = PaToVa(LoaderBlock->Extension);
 
     TRACE("WinLdrInitializePhase1() completed\n");
 }
@@ -377,7 +391,7 @@ WinLdrLoadModule(PCSTR ModuleName,
         return NULL;
     }
 
-    /* Get this file's size */
+    /* Retrieve its size */
     Status = ArcGetFileInformation(FileId, &FileInfo);
     if (Status != ESUCCESS)
     {
@@ -391,11 +405,12 @@ WinLdrLoadModule(PCSTR ModuleName,
     PhysicalBase = MmAllocateMemoryWithType(FileSize, MemoryType);
     if (PhysicalBase == NULL)
     {
+        ERR("Could not allocate memory for '%s'\n", ModuleName);
         ArcClose(FileId);
         return NULL;
     }
 
-    /* Load whole file */
+    /* Load the whole file */
     Status = ArcRead(FileId, PhysicalBase, FileSize, &BytesRead);
     ArcClose(FileId);
     if (Status != ESUCCESS)
@@ -639,6 +654,95 @@ LoadWindowsCore(IN USHORT OperatingSystemVersion,
         }
     }
 
+    /* Parse the boot options */
+    Options = BootOptions;
+    TRACE("LoadWindowsCore: BootOptions '%s'\n", BootOptions);
+    while (Options)
+    {
+        /* Skip possible initial whitespace */
+        Options += strspn(Options, " \t");
+
+        /* Check whether a new option starts */
+        if (*Options == '/')
+        {
+            Options++;
+
+            if (_strnicmp(Options, "3GB", 3) == 0)
+            {
+                /* We found the 3GB option. */
+                FIXME("LoadWindowsCore: 3GB - TRUE (not implemented)\n");
+                VirtualBias = TRUE;
+            }
+            if (_strnicmp(Options, "SOS", 3) == 0)
+            {
+                /* We found the SOS option. */
+                FIXME("LoadWindowsCore: SOS - TRUE (not implemented)\n");
+                SosEnabled = TRUE;
+            }
+            if (OperatingSystemVersion > _WIN32_WINNT_NT4)
+            {
+                if (_strnicmp(Options, "SAFEBOOT", 8) == 0)
+                {
+                    /* We found the SAFEBOOT option. */
+                    FIXME("LoadWindowsCore: SAFEBOOT - TRUE (not implemented)\n");
+                    SafeBoot = TRUE;
+                }
+                if (_strnicmp(Options, "PAE", 3) == 0)
+                {
+                    /* We found the PAE option. */
+                    FIXME("LoadWindowsCore: PAE - TRUE (not implemented)\n");
+                    PaeEnabled = TRUE;
+                }
+            }
+            if (OperatingSystemVersion > _WIN32_WINNT_WIN2K)
+            {
+                if (_strnicmp(Options, "NOPAE", 5) == 0)
+                {
+                    /* We found the NOPAE option. */
+                    FIXME("LoadWindowsCore: NOPAE - TRUE (not implemented)\n");
+                    PaeDisabled = TRUE;
+                }
+                if (_strnicmp(Options, "BOOTLOGO", 8) == 0)
+                {
+                    /* We found the BOOTLOGO option. */
+                    FIXME("LoadWindowsCore: BOOTLOGO - TRUE (not implemented)\n");
+                    BootLogo = TRUE;
+                }
+                if (!LoaderBlock->SetupLdrBlock)
+                {
+                    if (_strnicmp(Options, "NOEXECUTE=ALWAYSOFF", 19) == 0)
+                    {
+                        /* We found the NOEXECUTE=ALWAYSOFF option. */
+                        FIXME("LoadWindowsCore: NOEXECUTE=ALWAYSOFF - TRUE (not implemented)\n");
+                        NoexecuteDisabled = TRUE;
+                    }
+                    else if (_strnicmp(Options, "NOEXECUTE", 9) == 0)
+                    {
+                        /* We found the NOEXECUTE option. */
+                        FIXME("LoadWindowsCore: NOEXECUTE - TRUE (not implemented)\n");
+                        NoexecuteEnabled = TRUE;
+                    }
+
+                    if (_strnicmp(Options, "EXECUTE", 7) == 0)
+                    {
+                        /* We found the EXECUTE option. */
+                        FIXME("LoadWindowsCore: EXECUTE - TRUE (not implemented)\n");
+                        NoexecuteDisabled = TRUE;
+                    }
+                }
+            }
+        }
+
+        /* Search for another whitespace */
+        Options = strpbrk(Options, " \t");
+    }
+
+    if (SafeBoot)   
+    {   
+        PaeDisabled = TRUE;   
+        NoexecuteDisabled = TRUE;   
+    }   
+
     /* Load all referenced DLLs for Kernel, HAL and Kernel Debugger Transport DLL */
     Success  = PeLdrScanImportDescriptorTable(&LoaderBlock->LoadOrderListHead, DirPath, *KernelDTE);
     Success &= PeLdrScanImportDescriptorTable(&LoaderBlock->LoadOrderListHead, DirPath, HalDTE);
@@ -648,6 +752,68 @@ LoadWindowsCore(IN USHORT OperatingSystemVersion,
     }
 
     return Success;
+}
+
+static
+BOOLEAN
+WinLdrInitErrataInf(
+    IN OUT PLOADER_PARAMETER_BLOCK LoaderBlock,
+    IN USHORT OperatingSystemVersion,
+    IN PCSTR SystemRoot)
+{
+    LONG rc;
+    HKEY hKey;
+    ULONG BufferSize;
+    ULONG FileSize;
+    PVOID PhysicalBase;
+    WCHAR szFileName[80];
+    CHAR ErrataFilePath[MAX_PATH];
+
+    /* Open either the 'BiosInfo' (Windows <= 2003) or the 'Errata' (Vista+) key */
+    if (OperatingSystemVersion >= _WIN32_WINNT_VISTA)
+    {
+        rc = RegOpenKey(NULL,
+                        L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Control\\Errata",
+                        &hKey);
+    }
+    else // (OperatingSystemVersion <= _WIN32_WINNT_WS03)
+    {
+        rc = RegOpenKey(NULL,
+                        L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Control\\BiosInfo",
+                        &hKey);
+    }
+    if (rc != ERROR_SUCCESS)
+    {
+        WARN("Could not open the BiosInfo/Errata registry key (Error %u)\n", (int)rc);
+        return FALSE;
+    }
+
+    /* Retrieve the INF file name value */
+    BufferSize = sizeof(szFileName);
+    rc = RegQueryValue(hKey, L"InfName", NULL, (PUCHAR)szFileName, &BufferSize);
+    if (rc != ERROR_SUCCESS)
+    {
+        WARN("Could not retrieve the InfName value (Error %u)\n", (int)rc);
+        return FALSE;
+    }
+
+    // TODO: "SystemBiosDate"
+
+    RtlStringCbPrintfA(ErrataFilePath, sizeof(ErrataFilePath), "%s%s%S",
+                       SystemRoot, "inf\\", szFileName);
+
+    /* Load the INF file */
+    PhysicalBase = WinLdrLoadModule(ErrataFilePath, &FileSize, LoaderRegistryData);
+    if (!PhysicalBase)
+    {
+        WARN("Could not load '%s'\n", ErrataFilePath);
+        return FALSE;
+    }
+
+    LoaderBlock->Extension->EmInfFileImage = PaToVa(PhysicalBase);
+    LoaderBlock->Extension->EmInfFileSize  = FileSize;
+
+    return TRUE;
 }
 
 ARC_STATUS
@@ -663,9 +829,9 @@ LoadAndBootWindows(
     BOOLEAN Success;
     USHORT OperatingSystemVersion;
     PLOADER_PARAMETER_BLOCK LoaderBlock;
-    CHAR  BootPath[MAX_PATH];
-    CHAR  FileName[MAX_PATH];
-    CHAR  BootOptions[256];
+    CHAR BootPath[MAX_PATH];
+    CHAR FileName[MAX_PATH];
+    CHAR BootOptions[256];
 
     /* Retrieve the (mandatory) boot type */
     ArgValue = GetArgumentValue(Argc, Argv, "BootType");
@@ -784,17 +950,13 @@ LoadAndBootWindows(
     File = strstr(BootOptions, "/RDPATH=");
     if (File)
     {
-        /* Copy the file name and everything else after it */
-        RtlStringCbCopyA(FileName, sizeof(FileName), File + 8);
-
-        /* Null-terminate */
-        *strstr(FileName, " ") = ANSI_NULL;
-
         /* Load the ramdisk */
-        Status = RamDiskLoadVirtualFile(FileName, SystemPartition);
+        Status = RamDiskInitialize(FALSE, BootOptions, SystemPartition);
         if (Status != ESUCCESS)
         {
-            UiMessageBox("Failed to load RAM disk file %s", FileName);
+            File += 8;
+            UiMessageBox("Failed to load RAM disk file '%.*s'",
+                         strcspn(File, " \t"), File);
             return Status;
         }
     }
@@ -802,8 +964,8 @@ LoadAndBootWindows(
     /* Let user know we started loading */
     //UiDrawStatusText("Loading...");
 
-    /* Allocate and minimalist-initialize LPB */
-    AllocateAndInitLPB(&LoaderBlock);
+    /* Allocate and minimally-initialize the Loader Parameter Block */
+    AllocateAndInitLPB(OperatingSystemVersion, &LoaderBlock);
 
     /* Load the system hive */
     UiDrawBackdrop();
@@ -814,12 +976,23 @@ LoadAndBootWindows(
     if (!Success)
         return ENOEXEC;
 
+    /* Fixup the version number using data from the registry */
+    if (OperatingSystemVersion == 0)
+        OperatingSystemVersion = WinLdrDetectVersion();
+    LoaderBlock->Extension->MajorVersion = (OperatingSystemVersion & 0xFF00) >> 8;
+    LoaderBlock->Extension->MinorVersion = (OperatingSystemVersion & 0xFF);
+
     /* Load NLS data, OEM font, and prepare boot drivers list */
     Success = WinLdrScanSystemHive(LoaderBlock, BootPath);
     TRACE("SYSTEM hive %s\n", (Success ? "scanned" : "not scanned"));
     /* Bail out if failure */
     if (!Success)
         return ENOEXEC;
+
+    /* Load the Firmware Errata file */
+    Success = WinLdrInitErrataInf(LoaderBlock, OperatingSystemVersion, BootPath);
+    TRACE("Firmware Errata file %s\n", (Success ? "loaded" : "not loaded"));
+    /* Not necessarily fatal if not found - carry on going */
 
     /* Finish loading */
     return LoadAndBootWindowsCommon(OperatingSystemVersion,
@@ -845,6 +1018,8 @@ LoadAndBootWindowsCommon(
 
     TRACE("LoadAndBootWindowsCommon()\n");
 
+    ASSERT(OperatingSystemVersion != 0);
+
 #ifdef _M_IX86
     /* Setup redirection support */
     WinLdrSetupEms((PCHAR)BootOptions);
@@ -857,9 +1032,6 @@ LoadAndBootWindowsCommon(
     UiDrawBackdrop();
     UiDrawProgressBarCenter(20, 100, "Detecting hardware...");
     LoaderBlock->ConfigurationRoot = MachHwDetect();
-
-    if (OperatingSystemVersion == 0)
-        OperatingSystemVersion = WinLdrDetectVersion();
 
     /* Load the operating system core: the Kernel, the HAL and the Kernel Debugger Transport DLL */
     Success = LoadWindowsCore(OperatingSystemVersion,

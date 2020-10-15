@@ -17,18 +17,12 @@
 
 typedef struct _INTERNAL_WORK_QUEUE_ITEM
 {
-  WORK_QUEUE_ITEM WorkItem;
-  PDEVICE_OBJECT PhysicalDeviceObject;
-  PDEVICE_CHANGE_COMPLETE_CALLBACK Callback;
-  PVOID Context;
-  PTARGET_DEVICE_CUSTOM_NOTIFICATION NotificationStructure;
+    WORK_QUEUE_ITEM WorkItem;
+    PDEVICE_OBJECT PhysicalDeviceObject;
+    PDEVICE_CHANGE_COMPLETE_CALLBACK Callback;
+    PVOID Context;
+    PTARGET_DEVICE_CUSTOM_NOTIFICATION NotificationStructure;
 } INTERNAL_WORK_QUEUE_ITEM, *PINTERNAL_WORK_QUEUE_ITEM;
-
-NTSTATUS
-NTAPI
-IopCreateDeviceKeyPath(IN PCUNICODE_STRING RegistryPath,
-                       IN ULONG CreateOptions,
-                       OUT PHANDLE Handle);
 
 NTSTATUS
 IopSetDeviceInstanceData(HANDLE InstanceKey,
@@ -53,57 +47,57 @@ IopGetInterfaceTypeString(INTERFACE_TYPE IfType)
 {
     switch (IfType)
     {
-       case Internal:
-         return L"Internal";
+        case Internal:
+            return L"Internal";
 
-       case Isa:
-         return L"Isa";
+        case Isa:
+            return L"Isa";
 
-       case Eisa:
-         return L"Eisa";
+        case Eisa:
+            return L"Eisa";
 
-       case MicroChannel:
-         return L"MicroChannel";
+        case MicroChannel:
+            return L"MicroChannel";
 
-       case TurboChannel:
-         return L"TurboChannel";
+        case TurboChannel:
+            return L"TurboChannel";
 
-       case PCIBus:
-         return L"PCIBus";
+        case PCIBus:
+            return L"PCIBus";
 
-       case VMEBus:
-         return L"VMEBus";
+        case VMEBus:
+            return L"VMEBus";
 
-       case NuBus:
-         return L"NuBus";
+        case NuBus:
+            return L"NuBus";
 
-       case PCMCIABus:
-         return L"PCMCIABus";
+        case PCMCIABus:
+            return L"PCMCIABus";
 
-       case CBus:
-         return L"CBus";
+        case CBus:
+            return L"CBus";
 
-       case MPIBus:
-         return L"MPIBus";
+        case MPIBus:
+            return L"MPIBus";
 
-       case MPSABus:
-         return L"MPSABus";
+        case MPSABus:
+            return L"MPSABus";
 
-       case ProcessorInternal:
-         return L"ProcessorInternal";
+        case ProcessorInternal:
+            return L"ProcessorInternal";
 
-       case PNPISABus:
-         return L"PNPISABus";
+        case PNPISABus:
+            return L"PNPISABus";
 
-       case PNPBus:
-         return L"PNPBus";
+        case PNPBus:
+            return L"PNPBus";
 
-       case Vmcs:
-         return L"Vmcs";
+        case Vmcs:
+            return L"Vmcs";
 
-       default:
-         DPRINT1("Invalid bus type: %d\n", IfType);
-         return NULL;
+        default:
+            DPRINT1("Invalid bus type: %d\n", IfType);
+            return NULL;
     }
 }
 
@@ -111,12 +105,12 @@ VOID
 NTAPI
 IopReportTargetDeviceChangeAsyncWorker(PVOID Context)
 {
-  PINTERNAL_WORK_QUEUE_ITEM Item;
+    PINTERNAL_WORK_QUEUE_ITEM Item;
 
-  Item = (PINTERNAL_WORK_QUEUE_ITEM)Context;
-  PpSetCustomTargetEvent(Item->PhysicalDeviceObject, NULL, NULL, Item->Callback, Item->Context, Item->NotificationStructure);
-  ObDereferenceObject(Item->PhysicalDeviceObject);
-  ExFreePoolWithTag(Context, '  pP');
+    Item = (PINTERNAL_WORK_QUEUE_ITEM)Context;
+    PpSetCustomTargetEvent(Item->PhysicalDeviceObject, NULL, NULL, Item->Callback, Item->Context, Item->NotificationStructure);
+    ObDereferenceObject(Item->PhysicalDeviceObject);
+    ExFreePoolWithTag(Context, '  pP');
 }
 
 NTSTATUS
@@ -400,6 +394,8 @@ IoReportDetectedDevice(IN PDRIVER_OBJECT DriverObject,
                               &DeviceNode->InstancePath);
 
     DPRINT("Reported device: %S (%wZ)\n", HardwareId, &DeviceNode->InstancePath);
+
+    PiQueueDeviceAction(Pdo, PiActionEnumDeviceTree, NULL, NULL);
 
     /* Return the PDO */
     if (DeviceObject) *DeviceObject = Pdo;

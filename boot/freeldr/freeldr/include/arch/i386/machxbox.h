@@ -22,24 +22,9 @@
 #include "mm.h"
 #endif
 
-#define MAX_XBOX_COM_PORTS    2
+#include <drivers/xbox/xgpu.h>
 
-#define LPC_IO_BASE             0x2E
-#define LPC_ENTER_CONFIG_KEY    0x55
-#define LPC_EXIT_CONFIG_KEY     0xAA
-
-#define LPC_DEVICE_SERIAL_PORT_1    0x4
-#define LPC_DEVICE_SERIAL_PORT_2    0x5
-
-#define LPC_CONFIG_DEVICE_NUMBER                0x07
-#define LPC_CONFIG_DEVICE_ACTIVATE              0x30
-#define LPC_CONFIG_DEVICE_BASE_ADDRESS_HIGH     0x60
-#define LPC_CONFIG_DEVICE_BASE_ADDRESS_LOW      0x61
-#define LPC_CONFIG_DEVICE_INTERRUPT             0x70
-
-extern UCHAR XboxFont8x16[256 * 16];
-
-VOID XboxMachInit(const char *CmdLine);
+extern UCHAR BitmapFont8x16[256 * 16];
 
 VOID XboxConsPutChar(int Ch);
 BOOLEAN XboxConsKbHit(VOID);
@@ -60,12 +45,13 @@ VOID XboxVideoSetPaletteColor(UCHAR Color, UCHAR Red, UCHAR Green, UCHAR Blue);
 VOID XboxVideoGetPaletteColor(UCHAR Color, UCHAR* Red, UCHAR* Green, UCHAR* Blue);
 VOID XboxVideoSync(VOID);
 VOID XboxVideoPrepareForReactOS(VOID);
+VOID XboxVideoScrollUp(VOID);
 VOID XboxPrepareForReactOS(VOID);
 
 VOID XboxMemInit(VOID);
-PVOID XboxMemReserveMemory(ULONG MbToReserve);
 PFREELDR_MEMORY_DESCRIPTOR XboxMemGetMemoryMap(ULONG *MemoryMapSize);
 
+VOID XboxDiskInit(BOOLEAN Init);
 BOOLEAN XboxDiskReadLogicalSectors(UCHAR DriveNumber, ULONGLONG SectorNumber, ULONG SectorCount, PVOID Buffer);
 BOOLEAN XboxDiskGetDriveGeometry(UCHAR DriveNumber, PGEOMETRY DriveGeometry);
 ULONG XboxDiskGetCacheableBlockCount(UCHAR DriveNumber);

@@ -35,9 +35,10 @@ HINSTANCE g_hInstance;
 INT g_FontIndex = 0;
 INT g_NumFonts = 0;
 LOGFONTW g_LogFonts[64];
-LPCWSTR g_fileName;
+LPCWSTR g_fileName = L"";
 WCHAR g_FontTitle[1024] = L"";
 BOOL g_FontPrint = FALSE;
+BOOL g_DisableInstall = FALSE;
 
 static const WCHAR g_szFontViewClassName[] = L"FontViewWClass";
 
@@ -101,7 +102,6 @@ wWinMain(HINSTANCE hThisInstance,
 	int argc;
 	INT i;
 	WCHAR** argv;
-	WCHAR szFileName[MAX_PATH] = L"";
 	DWORD dwSize;
 	HWND hMainWnd;
 	MSG msg;
@@ -124,11 +124,13 @@ wWinMain(HINSTANCE hThisInstance,
 	argv = CommandLineToArgvW(GetCommandLineW(), &argc);
 	if (argc < 2)
 	{
+#if 0
+		WCHAR szFileName[MAX_PATH] = L"";
 		OPENFILENAMEW fontOpen;
-        WCHAR filter[MAX_PATH*2], dialogTitle[MAX_PATH];
+        WCHAR filter[MAX_PATH*2] = {0}, dialogTitle[MAX_PATH];
 
 		LoadStringW(NULL, IDS_OPEN, dialogTitle, ARRAYSIZE(dialogTitle));
-		LoadStringW(NULL, IDS_FILTER_LIST, filter, ARRAYSIZE(filter));
+		LoadStringW(NULL, IDS_FILTER_LIST, filter, ARRAYSIZE(filter) - 1);
 
 		/* Clears out any values of fontOpen before we use it */
 		ZeroMemory(&fontOpen, sizeof(fontOpen));
@@ -153,34 +155,46 @@ wWinMain(HINSTANCE hThisInstance,
 			exiting the program altogether */
 			return 0;
 		}
+#endif
 	}
 	else
 	{
 		/* Try to add the font resource from command line */
-//		fileName = argv[1];
-		if (argc == 2)
-		{
-			fileName = argv[1];
-		}
-		else
-		{
-			/* Windows fontview supports the /p option, which displays print dialog */
-			fileName = argv[2];
-			if (wcscmp(argv[1], L"/p") == 0)
-			{
-				g_FontPrint = TRUE;
-			}
-			else
-			{
-				fileName = argv[1];
-			}
-		}
+        for (i = 1; i < argc; ++i)
+        {
+            // Treat the last argument as filename
+            if (i + 1 == argc)
+            {
+                fileName = argv[i];
+            }
+            else if (argv[i][0] == '/' || argv[i][0] == '-')
+            {
+                switch (argv[i][1])
+                {
+                case 'p':
+                case 'P':
+                    g_FontPrint = TRUE;
+                    break;
+                case 'd':
+                case 'D':
+                    g_DisableInstall = TRUE;
+                    break;
+                default:
+                    fileName = argv[i];
+                    break;
+                }
+            }
+            else
+            {
+                fileName = argv[i];
+            }
+        }
 		g_fileName = fileName;
 	}
 
-	if (!AddFontResourceW(fileName))
+	if (!AddFontResourceW(g_fileName))
 	{
-		ErrorMsgBox(0, IDS_ERROR_NOFONT, fileName);
+		ErrorMsgBox(0, IDS_ERROR_NOFONT, g_fileName);
 		return -1;
 	}
 
@@ -315,6 +329,7 @@ MainWnd_OnCreate(HWND hwnd)
 				NULL					/* Window Creation data */
 			);
 	SendMessage(hButtonInstall, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), (LPARAM)TRUE);
+    EnableWindow(hButtonInstall, !g_DisableInstall);
 
 	/* Create the print button */
 	LoadStringW(g_hInstance, IDS_PRINT, szPrint, MAX_BUTTONNAME);

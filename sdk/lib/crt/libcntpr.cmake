@@ -112,7 +112,7 @@ if(ARCH STREQUAL "i386")
     endif()
 elseif(ARCH STREQUAL "amd64")
     list(APPEND LIBCNTPR_ASM_SOURCE
-        except/amd64/chkstk_asm.s
+        except/amd64/chkstk_ms.s
         except/amd64/seh.s
         setjmp/amd64/setjmp.s
         math/amd64/atan.S
@@ -241,8 +241,8 @@ set_source_files_properties(${LIBCNTPR_ASM_SOURCE} PROPERTIES COMPILE_DEFINITION
 add_asm_files(libcntpr_asm ${LIBCNTPR_ASM_SOURCE})
 
 add_library(libcntpr ${LIBCNTPR_SOURCE} ${libcntpr_asm})
-add_target_compile_definitions(libcntpr
-    NO_RTL_INLINES
+target_compile_definitions(libcntpr
+ PRIVATE    NO_RTL_INLINES
     _NTSYSTEM_
     _NTDLLBUILD_
     _LIBCNT_

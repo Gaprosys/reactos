@@ -144,6 +144,13 @@ typedef enum _CM_SHARE_DISPOSITION
 #define CM_RESOURCE_INTERRUPT_LATCHED         0x0001
 #define CM_RESOURCE_INTERRUPT_MESSAGE         0x0002
 #define CM_RESOURCE_INTERRUPT_POLICY_INCLUDED 0x0004
+#define CM_RESOURCE_INTERRUPT_ALLOW_RESERVED_IDT    0x0008
+#define CM_RESOURCE_INTERRUPT_SECONDARY_INTERRUPT   0x0010
+#define CM_RESOURCE_INTERRUPT_WAKE_HINT             0x0020
+
+#define CM_RESOURCE_INTERRUPT_LEVEL_LATCHED_BITS 0x0001
+
+#define CM_RESOURCE_INTERRUPT_MESSAGE_TOKEN   ((ULONG)-2)
 
 //
 // NtInitializeRegistry Flags
@@ -181,14 +188,15 @@ typedef enum _KEY_VALUE_INFORMATION_CLASS
     MaxKeyValueInfoClass
 } KEY_VALUE_INFORMATION_CLASS;
 
-typedef enum _KEY_SET_INFORMATION_CLASS {
-  KeyWriteTimeInformation,
-  KeyWow64FlagsInformation,
-  KeyControlFlagsInformation,
-  KeySetVirtualizationInformation,
-  KeySetDebugInformation,
-  KeySetHandleTagsInformation,
-  MaxKeySetInfoClass
+typedef enum _KEY_SET_INFORMATION_CLASS
+{
+    KeyWriteTimeInformation,
+    KeyWow64FlagsInformation,
+    KeyControlFlagsInformation,
+    KeySetVirtualizationInformation,
+    KeySetDebugInformation,
+    KeySetHandleTagsInformation,
+    MaxKeySetInfoClass
 } KEY_SET_INFORMATION_CLASS;
 
 #endif
@@ -451,6 +459,16 @@ typedef struct _PLUGPLAY_CONTROL_ENUMERATE_DEVICE_DATA
     UNICODE_STRING DeviceInstance;
     ULONG Flags;
 } PLUGPLAY_CONTROL_ENUMERATE_DEVICE_DATA, *PPLUGPLAY_CONTROL_ENUMERATE_DEVICE_DATA;
+
+// Class 0x06
+typedef struct _PLUGPLAY_CONTROL_QUERY_REMOVE_DATA
+{
+    UNICODE_STRING DeviceInstance;
+    ULONG Flags;
+    PNP_VETO_TYPE VetoType;
+    LPWSTR VetoName;
+    ULONG NameLength;
+} PLUGPLAY_CONTROL_QUERY_REMOVE_DATA, *PPLUGPLAY_CONTROL_QUERY_REMOVE_DATA;
 
 // Class 0x07
 typedef struct _PLUGPLAY_CONTROL_USER_RESPONSE_DATA

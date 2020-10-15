@@ -690,6 +690,8 @@ MMixerSetGetVolumeControlDetails(
 
     /* get input */
     Input = (LPMIXERCONTROLDETAILS_UNSIGNED)MixerControlDetails->paDetails;
+    if (!Input)
+        return MM_STATUS_UNSUCCESSFUL; /* to prevent dereferencing NULL */
 
     if (bSet)
     {
@@ -838,6 +840,7 @@ MMixerGetDeviceNameWithComponentId(
                 if (Status == MM_STATUS_SUCCESS)
                 {
                     MixerContext->Copy(OutDeviceName, DeviceName, min(ResultLength, (MAXPNAMELEN-1)*2));
+                    MixerContext->Free(DeviceName);
                 }
 
                 MixerContext->CloseKey(hGuidKey);

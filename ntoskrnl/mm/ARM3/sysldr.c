@@ -1466,8 +1466,14 @@ MiFindInitializationCode(OUT PVOID *StartVa,
     /* Assume failure */
     *StartVa = NULL;
 
-    /* Enter a critical region while we loop the list */
+    /* Acquire the necessary locks while we loop the list */
     KeEnterCriticalRegion();
+    KeWaitForSingleObject(&MmSystemLoadLock,
+                          WrVirtualMemory,
+                          KernelMode,
+                          FALSE,
+                          NULL);
+    ExAcquireResourceExclusiveLite(&PsLoadedModuleResource, TRUE);
 
     /* Loop all loaded modules */
     NextEntry = PsLoadedModuleList.Flink;
@@ -1615,7 +1621,9 @@ MiFindInitializationCode(OUT PVOID *StartVa,
         NextEntry = NextEntry->Flink;
     }
 
-    /* Leave the critical region and return */
+    /* Release the locks and return */
+    ExReleaseResourceLite(&PsLoadedModuleResource);
+    KeReleaseMutant(&MmSystemLoadLock, 1, FALSE, FALSE);
     KeLeaveCriticalRegion();
 }
 
@@ -2409,7 +2417,14 @@ MiSetSystemCodeProtection(
         TempPte = *PointerPte;
 
         /* Make sure it's valid */
-        ASSERT(TempPte.u.Hard.Valid == 1);
+        if (TempPte.u.Hard.Valid != 1)
+        {
+            DPRINT1("CORE-16449: FirstPte=%p, LastPte=%p, Protection=%lx\n", FirstPte, LastPte, Protection);
+            DPRINT1("CORE-16449: PointerPte=%p, TempPte=%lx\n", PointerPte, TempPte.u.Long);
+            DPRINT1("CORE-16449: Please issue the 'mod' and 'bt' (KDBG) or 'lm' and 'kp' (WinDbg) commands. Then report this in Jira.\n");
+            ASSERT(TempPte.u.Hard.Valid == 1);
+            break;
+        }
 
         /* Update the protection */
         TempPte.u.Hard.Write = BooleanFlagOn(Protection, IMAGE_SCN_MEM_WRITE);
@@ -3259,7 +3274,7 @@ LoaderScan:
         PspRunLoadImageNotifyRoutines(FileName, NULL, &ImageInfo);
     }
 
-#if defined(KDBG) || defined(_WINKD_)
+#ifdef __ROS_ROSSYM__
     /* MiCacheImageSymbols doesn't detect rossym */
     if (TRUE)
 #else
